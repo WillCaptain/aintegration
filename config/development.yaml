@@ -1,0 +1,62 @@
+# 开发环境配置
+database:
+  host: "localhost"
+  port: 5432
+  name: "aintegration_dev"
+  user: "postgres"
+  password: "${DB_PASSWORD:password}"
+  pool_size: 10
+  max_overflow: 20
+
+redis:
+  host: "localhost"
+  port: 6379
+  db: 0
+  password: "${REDIS_PASSWORD:}"
+  
+logging:
+  level: "DEBUG"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/aintegration.log"
+
+mcp_server:
+  host: "localhost"
+  port: 8004
+  protocol: "http"
+
+a2a_server:
+  host: "localhost"
+  port: 8005
+  protocol: "a2a"
+
+google_adk:
+  api_key: "${GOOGLE_API_KEY:your-api-key}"
+  model: "gemini-pro"
+  
+agents:
+  hr_agent:
+    system_prompt: "你是一个HR系统的专业代理，负责处理员工相关的所有操作"
+    allowed_tools: ["create_employee", "update_employee", "get_employee_info"]
+    
+  finance_agent:
+    system_prompt: "你是一个财务系统的专业代理，负责处理财务相关的所有操作"
+    allowed_tools: ["enroll_payroll", "create_payroll_account"]
+    
+  it_agent:
+    system_prompt: "你是一个IT系统的专业代理，负责处理IT相关的所有操作"
+    allowed_tools: ["apply_computer", "create_user_account"]
+    
+  inventory_agent:
+    system_prompt: "你是一个库存系统的专业代理，负责处理库存相关的所有操作"
+    allowed_tools: ["outbound", "check_outbound_status"]
+    
+  access_agent:
+    system_prompt: "你是一个门禁系统的专业代理，负责处理门禁相关的所有操作"
+    allowed_tools: ["grant_access", "create_access_card"]
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  title: "AIntegration API"
+  description: "企业集成代理框架API"
+  version: "1.0.0"

@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # PostgreSQL数据库
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: aintegration_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis缓存
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # AIntegration主服务
+  aintegration:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=postgres
+      - DB_PASSWORD=password
+      - REDIS_HOST=redis
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+  # MCP Server
+  mcp-server:
+    build: .
+    command: python -m src.infrastructure.mcp_server
+    ports:
+      - "8004:8004"
+    environment:
+      - DB_HOST=postgres
+      - DB_PASSWORD=password
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  # A2A Server
+  a2a-server:
+    build: .
+    command: python -m src.infrastructure.a2a_server
+    ports:
+      - "8005:8005"
+    environment:
+      - DB_HOST=postgres
+      - DB_PASSWORD=password
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
