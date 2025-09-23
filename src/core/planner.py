@@ -10,14 +10,14 @@ from datetime import datetime
 
 from ..models.plan import Plan
 from ..models.execution import Execution
-from ..database.repositories.execution_repository import ExecutionRepository
+from ..database.memory_repositories import MemoryExecutionRepository
 
 logger = logging.getLogger(__name__)
 
 class RequestHandler:
     """请求处理器"""
     
-    def __init__(self, plan_module, execution_repo: ExecutionRepository):
+    def __init__(self, plan_module, execution_repo: MemoryExecutionRepository):
         self.plan_module = plan_module
         self.execution_repo = execution_repo
     
@@ -129,7 +129,7 @@ class PlanGenerator:
 class ExecutionMonitor:
     """执行监控器"""
     
-    def __init__(self, execution_repo: ExecutionRepository, plan_generator: PlanGenerator):
+    def __init__(self, execution_repo: MemoryExecutionRepository, plan_generator: PlanGenerator):
         self.execution_repo = execution_repo
         self.plan_generator = plan_generator
     
@@ -181,7 +181,7 @@ class ExecutionMonitor:
 class PlannerModule:
     """Planner模块主类"""
     
-    def __init__(self, plan_module, execution_repo: ExecutionRepository):
+    def __init__(self, plan_module, execution_repo: MemoryExecutionRepository):
         self.plan_module = plan_module
         self.execution_repo = execution_repo
         

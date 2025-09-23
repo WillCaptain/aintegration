@@ -3,75 +3,116 @@ Google ADK集成
 
 Agent开发框架集成
 """
-
+import os
 import logging
-from typing import Dict, List, Optional, Any
-import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
-
+from typing import Dict, List, Optional, Any, Callable
+from config import config_loader
+from .llm_client import build_llm_client
+from .mcp_client import MCPClient
 logger = logging.getLogger(__name__)
 
 class ReactAgent:
     """ReAct智能体实现"""
     
-    def __init__(self, system_prompt: str, tools: List[str], model: str = "gemini-pro"):
+    def __init__(self, 
+                 system_prompt: str, 
+                 tools: List[str], 
+                 model: str = "gemini-pro",
+                 tool_registry: Optional[Dict[str, Callable[..., Any]]] = None,
+                 tool_schemas: Optional[Dict[str, Dict[str, Any]]] = None,
+    ):
         self.system_prompt = system_prompt
-        self.tools = tools
+        self.tools = tools or []
         self.model = model
+        self.tool_registry = tool_registry or {}
+        # 可选：Google ADK 原生函数声明（JSON Schema）。键为工具名，值为 function_declaration 结构
+        self.tool_schemas = tool_schemas or {}
         self.conversation_history = []
-        self._initialize_model()
-    
-    def _initialize_model(self):
-        """初始化模型"""
+        # 最大工具调用步数（从配置读取，默认3）
         try:
-            # 配置生成式AI
-            genai.configure(api_key="your-api-key")  # 从配置中获取
-            
-            # 创建生成模型
-            self.generation_config = {
-                "temperature": 0.7,
-                "top_p": 0.8,
-                "top_k": 40,
-                "max_output_tokens": 2048,
-            }
-            
-            # 安全设置
-            self.safety_settings = {
-                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-            }
-            
-            self.model_instance = genai.GenerativeModel(
-                model_name=self.model,
-                generation_config=self.generation_config,
-                safety_settings=self.safety_settings
-            )
-            
-            logger.info(f"Initialized ReactAgent with model {self.model}")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize ReactAgent: {e}")
-            raise
+            self.max_steps = int(config_loader.get("google_adk.max_steps", 3))
+        except Exception:
+            self.max_steps = 3
+        # 构建 LLM 客户端（可插拔 provider）
+        self.llm = self._initialize_llm_client()
+        self.mcp = MCPClient()
+        # 预构建工具声明（若提供）
+        self._tools_declarations = self._build_tool_declarations()
     
+    def _initialize_llm_client(self):
+        """根据配置初始化可插拔 LLM 客户端。"""
+        provider = config_loader.get("llm.provider", "google")
+        model_name = self.model or config_loader.get("llm.model")
+        llm = build_llm_client(provider=provider, model_name=model_name)
+        logger.info("ReactAgent 使用 provider=%s, model=%s", provider, model_name)
+        return llm
+
+    
+
+    def _build_tool_declarations(self) -> Optional[List[Dict[str, Any]]]:
+        """将提供的 tool_schemas 转为 Gemini tools 结构。
+        期望的每个 schema 形如：
+        {
+          "name": "tool_name",
+          "description": "...",
+          "parameters": { ...json schema... }
+        }
+        返回格式：[{"function_declarations": [schema1, schema2, ...]}]
+        若无有效 schema，返回 None。
+        """
+        try:
+            declarations: List[Dict[str, Any]] = []
+            for tool_name in self.tools:
+                schema = self.tool_schemas.get(tool_name)
+                if not schema:
+                    continue
+                # 最少需要 name
+                if "name" not in schema:
+                    schema = {"name": tool_name, **schema}
+                declarations.append(schema)
+            if not declarations:
+                return None
+            return [{"function_declarations": declarations}]
+        except Exception as e:
+            logger.debug("Failed to build tool declarations: %s", e)
+            return None
+
     async def execute(self, context: str) -> Dict:
         """执行Agent任务"""
         try:
-            # 构建完整的提示
-            full_prompt = self._build_full_prompt(context)
-            
-            # 调用模型生成响应
-            response = await self._generate_response(full_prompt)
-            
-            # 处理响应
-            result = self._process_response(response)
+            # 工具循环（最多 max_steps）
+            running_summary = []
+            cur_prompt = self._build_full_prompt(context)
+
+            for step_index in range(self.max_steps):
+                # 让模型先提议是否需要调用工具
+                proposed = await self.llm.propose_tool_call(cur_prompt, tools=self._tools_declarations)
+                if not proposed:
+                    # 无函数调用建议，直接生成最终回答
+                    final_text = await self._generate_response(cur_prompt)
+                    result = self._process_response(final_text)
+                    break
+
+                tool_name = proposed.get("name")
+                tool_args = proposed.get("arguments", {})
+                # 统一通过 MCP 执行
+                tool_output = await self.mcp.execute_tool(tool_name, tool_args)
+
+                running_summary.append({"step": step_index + 1, "action": tool_name, "args": tool_args, "output": tool_output})
+
+                # 将工具输出拼接进后续提示，继续下一轮
+                cur_prompt = f"{cur_prompt}\n\n[工具调用结果 step={step_index+1} tool={tool_name}]\n{tool_output}"
+            else:
+                # 达到最大步数后，生成总结
+                final_text = await self._generate_response(cur_prompt)
+                result = self._process_response(final_text)
             
             # 记录对话历史
             self.conversation_history.append({
                 "context": context,
-                "response": response,
-                "result": result
+                "response": result.get("response"),
+                "result": result,
+                "trace": running_summary,
             })
             
             return result
@@ -105,13 +146,12 @@ class ReactAgent:
     
     async def _generate_response(self, prompt: str) -> str:
         """生成响应"""
-        try:
-            # 使用异步方式调用模型
-            response = await self.model_instance.generate_content_async(prompt)
-            return response.text
-        except Exception as e:
-            logger.error(f"Error generating response: {e}")
-            raise
+        # 纯 Gemini 路径
+
+        # 调用 Gemini：若有 tools 声明，传入以启用原生函数调用提示（单轮）。
+        tools_kw = self._tools_declarations if self._tools_declarations else None
+        text = await self.llm.generate(prompt, tools=tools_kw)
+        return text
     
     def _process_response(self, response: str) -> Dict:
         """处理响应"""
@@ -151,12 +191,7 @@ class ADKIntegration:
     
     def _initialize_adk(self):
         """初始化ADK"""
-        try:
-            genai.configure(api_key=self.api_key)
-            logger.info("ADK initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize ADK: {e}")
-            raise
+        logger.info("ADK container initialized (provider via LLMClient)")
     
     def create_react_agent(self, config: Dict) -> ReactAgent:
         """创建ReAct Agent"""
@@ -164,7 +199,9 @@ class ADKIntegration:
             agent = ReactAgent(
                 system_prompt=config["system_prompt"],
                 tools=config["tools"],
-                model=config.get("model", "gemini-pro")
+                model=config.get("model", "gemini-pro"),
+                tool_registry=config.get("tool_registry", {}),
+                tool_schemas=config.get("tool_schemas", {}),
             )
             
             agent_id = config.get("agent_id", f"agent_{len(self.agents)}")

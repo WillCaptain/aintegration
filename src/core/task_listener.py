@@ -12,8 +12,7 @@ from datetime import datetime
 
 from ..models.task import Task, TaskStatus
 from ..models.listener import Listener
-from ..database.repositories.task_repository import TaskRepository
-from ..database.repositories.listener_repository import ListenerRepository
+from ..database.memory_repositories import MemoryTaskRepository, MemoryListenerRepository
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +26,7 @@ class TaskUpdate:
 class TaskStateManager:
     """任务状态管理器"""
     
-    def __init__(self, task_repo: TaskRepository):
+    def __init__(self, task_repo: MemoryTaskRepository):
         self.task_repo = task_repo
         self.status_change_callbacks = []
     
@@ -70,7 +69,7 @@ class TaskStateManager:
 class ListenerScheduler:
     """侦听器调度器"""
     
-    def __init__(self, listener_repo: ListenerRepository, agent_manager):
+    def __init__(self, listener_repo: MemoryListenerRepository, agent_manager):
         self.listener_repo = listener_repo
         self.agent_manager = agent_manager
     
@@ -195,7 +194,7 @@ class ListenerScheduler:
 class TaskListenerModule:
     """任务侦听模块主类"""
     
-    def __init__(self, task_repo: TaskRepository, listener_repo: ListenerRepository, agent_manager):
+    def __init__(self, task_repo: MemoryTaskRepository, listener_repo: MemoryListenerRepository, agent_manager):
         self.task_state_manager = TaskStateManager(task_repo)
         self.listener_scheduler = ListenerScheduler(listener_repo, agent_manager)
         

@@ -20,18 +20,31 @@ logging:
   file: "/var/log/aintegration/aintegration.log"
 
 mcp_server:
-  host: "${MCP_HOST:localhost}"
+  host: "${MCP_HOST:127.0.0.1}"
   port: "${MCP_PORT:8004}"
-  protocol: "http"
+  protocol: ${MCP_PROTOCOL:ws}
 
 a2a_server:
   host: "${A2A_HOST:localhost}"
   port: "${A2A_PORT:8005}"
   protocol: "a2a"
 
+llm:
+  provider: "${LLM_PROVIDER:google}"
+  model: "${LLM_MODEL:gemini-pro}"
+
+openai:
+  api_key: ${OPENAI_API_KEY}
+  organization: ${OPENAI_ORG:}
+  base_url: https://api.openai.com/v1
+
+deepseek:
+  api_key: ${DEEPSEEK_API_KEY}
+  base_url: https://api.deepseek.com/v1
+
 google_adk:
   api_key: "${GOOGLE_API_KEY}"
-  model: "gemini-pro"
+  max_steps: ${GOOGLE_MAX_STEPS:3}
   
 agents:
   hr_agent:

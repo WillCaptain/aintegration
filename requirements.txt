@@ -1,18 +1,17 @@
-# Web框架
-fastapi==0.104.1
+# Web框架（与本机已装版本兼容）
+fastapi==0.117.1
 uvicorn==0.24.0
 python-multipart==0.0.6
 
-# 数据库
+# 数据库（测试不涉及，可临时移除 asyncpg 以避免编译）
 sqlalchemy==2.0.23
-asyncpg==0.29.0
 alembic==1.12.1
 
 # 缓存
 redis==5.0.1
 
 # 数据处理
-pydantic==2.5.0
+pydantic>=2.11.0
 pydantic-settings==2.1.0
 
 # 配置管理
@@ -40,3 +39,6 @@ mypy==1.7.1
 
 # 监控
 prometheus-client==0.19.0
+
+# WebSocket 客户端（用于 MCP JSON-RPC）
+websockets>=12.0

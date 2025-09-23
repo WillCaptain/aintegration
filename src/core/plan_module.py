@@ -12,16 +12,14 @@ from datetime import datetime
 from ..models.plan import Plan
 from ..models.task import Task
 from ..models.listener import Listener
-from ..database.repositories.plan_repository import PlanRepository
-from ..database.repositories.task_repository import TaskRepository
-from ..database.repositories.listener_repository import ListenerRepository
+from ..database.memory_repositories import MemoryPlanRepository, MemoryTaskRepository, MemoryListenerRepository
 
 logger = logging.getLogger(__name__)
 
 class PlanManager:
     """计划管理器"""
     
-    def __init__(self, plan_repo: PlanRepository):
+    def __init__(self, plan_repo: MemoryPlanRepository):
         self.plan_repo = plan_repo
     
     async def create_plan(self, plan_config: Dict) -> str:
@@ -69,7 +67,7 @@ class PlanManager:
 class TaskManager:
     """任务管理器"""
     
-    def __init__(self, task_repo: TaskRepository):
+    def __init__(self, task_repo: MemoryTaskRepository):
         self.task_repo = task_repo
     
     async def create_task(self, task_config: Dict) -> str:
@@ -109,7 +107,7 @@ class TaskManager:
 class ListenerManager:
     """侦听器管理器"""
     
-    def __init__(self, listener_repo: ListenerRepository):
+    def __init__(self, listener_repo: MemoryListenerRepository):
         self.listener_repo = listener_repo
     
     async def create_listener(self, listener_config: Dict) -> str:
@@ -146,7 +144,7 @@ class ListenerManager:
 class PlanModule:
     """计划模块主类"""
     
-    def __init__(self, plan_repo: PlanRepository, task_repo: TaskRepository, listener_repo: ListenerRepository):
+    def __init__(self, plan_repo: MemoryPlanRepository, task_repo: MemoryTaskRepository, listener_repo: MemoryListenerRepository):
         self.plan_manager = PlanManager(plan_repo)
         self.task_manager = TaskManager(task_repo)
         self.listener_manager = ListenerManager(listener_repo)

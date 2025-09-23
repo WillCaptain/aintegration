@@ -20,18 +20,31 @@ logging:
   file: "logs/aintegration.log"
 
 mcp_server:
-  host: "localhost"
-  port: 8004
-  protocol: "http"
+  host: ${MCP_HOST:127.0.0.1}
+  port:  ${MCP_PORT:8004}
+  protocol: ${MCP_PROTOCOL:ws}
 
 a2a_server:
   host: "localhost"
   port: 8005
   protocol: "a2a"
 
+llm:
+  provider: "google"  # 可选：google/openai/azure_openai/anthropic/...
+  model: "gemini-pro"
+  
+openai:
+  api_key: "${OPENAI_API_KEY}"
+  organization: "${OPENAI_ORG:}"   
+  base_url: "https://api.openai.com/v1"
+
+deepseek:
+  api_key: ${DEEPSEEK_API_KEY}
+  base_url: https://api.deepseek.com/v1
+
 google_adk:
   api_key: "${GOOGLE_API_KEY:your-api-key}"
-  model: "gemini-pro"
+  max_steps: 3
   
 agents:
   hr_agent:
