@@ -1,0 +1,16 @@
+name: email
+tools:
+  - name: send_email
+    description: 发送电子邮件
+    endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
+    parameters:
+      type: object
+      properties:
+        to:
+          type: string
+        subject:
+          type: string
+        body:
+          type: string
+      required: [to, subject, body]
+

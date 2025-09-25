@@ -1,0 +1,23 @@
+name: inventory
+system_context: "你是一个库存系统的专业代理，负责电脑出库与状态查询"
+tools:
+  - name: outbound
+    description: 创建电脑出库单
+    endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
+    parameters:
+      type: object
+      properties:
+        pc_model:
+          type: string
+      required: [pc_model]
+  - name: check_outbound_status
+    description: 查询出库单领取状态
+    endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
+    parameters:
+      type: object
+      properties:
+        outbound_id:
+          type: string
+      required: [outbound_id]
+
+

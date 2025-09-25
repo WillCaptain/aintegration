@@ -1,0 +1,16 @@
+name: access
+system_context: "你是一个门禁系统的专业代理，负责为员工开通门禁权限"
+tools:
+  - name: grant_access
+    description: 为员工开通门禁权限
+    endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
+    parameters:
+      type: object
+      properties:
+        emp_id:
+          type: string
+        name:
+          type: string
+      required: [emp_id, name]
+
+

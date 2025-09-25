@@ -1,12 +1,12 @@
 """
-Google ADK集成
+Agent 执行运行时（统一封装 LLM 与 MCP 调用）
 
-Agent开发框架集成
+原 adk_integration 更名为 agent_runtime：抽象一个通用 AgentRuntime
+供 BizAgent 使用来创建 ReAct 风格的执行器。
 """
-import os
 import logging
 from typing import Dict, List, Optional, Any, Callable
-from config import config_loader
+from config.config_loader import config_loader
 from .llm_client import build_llm_client
 from .mcp_client import MCPClient
 logger = logging.getLogger(__name__)
@@ -14,97 +14,134 @@ logger = logging.getLogger(__name__)
 class ReactAgent:
     """ReAct智能体实现"""
     
-    def __init__(self, 
-                 system_prompt: str, 
-                 tools: List[str], 
-                 model: str = "gemini-pro",
+    def __init__(self,
+                 system_prompt: str,
+                 tools: Optional[List[str]] = None,
                  tool_registry: Optional[Dict[str, Callable[..., Any]]] = None,
                  tool_schemas: Optional[Dict[str, Dict[str, Any]]] = None,
+                 app_name: Optional[str] = None,
     ):
         self.system_prompt = system_prompt
         self.tools = tools or []
-        self.model = model
         self.tool_registry = tool_registry or {}
-        # 可选：Google ADK 原生函数声明（JSON Schema）。键为工具名，值为 function_declaration 结构
-        self.tool_schemas = tool_schemas or {}
+        self.tool_schemas: Dict[str, Dict[str, Any]] = tool_schemas or {}
+        self.app_name = app_name
         self.conversation_history = []
-        # 最大工具调用步数（从配置读取，默认3）
+        # 工具循环最大步数
         try:
             self.max_steps = int(config_loader.get("google_adk.max_steps", 3))
         except Exception:
             self.max_steps = 3
-        # 构建 LLM 客户端（可插拔 provider）
-        self.llm = self._initialize_llm_client()
+        # 可插拔 LLM 与 MCP 客户端
+        self.llm = build_llm_client(
+            provider=config_loader.get("llm.provider"),
+            model_name= config_loader.get("llm.model")
+        )
         self.mcp = MCPClient()
-        # 预构建工具声明（若提供）
+        # 如果提供 app_name，则从 config/apps/<app_name>.yaml 加载工具 schema
+        if self.app_name and not self.tool_schemas:
+            try:
+                import os, yaml
+                cfg_path = os.path.join("config", "apps", f"{self.app_name}.yaml")
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    app_cfg = yaml.safe_load(f) or {}
+                tools_list = app_cfg.get("tools") or []
+                for td in tools_list:
+                    name = td.get("name")
+                    if not name:
+                        continue
+                    self.tool_schemas[name] = td
+                    if name not in self.tools:
+                        self.tools.append(name)
+            except Exception as e:
+                logger.warning("加载应用工具失败 app=%s: %s", self.app_name, e)
+
+        # 工具声明（用于 function calling 提示）
         self._tools_declarations = self._build_tool_declarations()
-    
-    def _initialize_llm_client(self):
-        """根据配置初始化可插拔 LLM 客户端。"""
-        provider = config_loader.get("llm.provider", "google")
-        model_name = self.model or config_loader.get("llm.model")
-        llm = build_llm_client(provider=provider, model_name=model_name)
-        logger.info("ReactAgent 使用 provider=%s, model=%s", provider, model_name)
-        return llm
+        # 移除直连 Google 模型，统一通过 llm_client 调用
 
-    
-
-    def _build_tool_declarations(self) -> Optional[List[Dict[str, Any]]]:
-        """将提供的 tool_schemas 转为 Gemini tools 结构。
-        期望的每个 schema 形如：
-        {
-          "name": "tool_name",
-          "description": "...",
-          "parameters": { ...json schema... }
-        }
-        返回格式：[{"function_declarations": [schema1, schema2, ...]}]
-        若无有效 schema，返回 None。
-        """
-        try:
-            declarations: List[Dict[str, Any]] = []
-            for tool_name in self.tools:
-                schema = self.tool_schemas.get(tool_name)
-                if not schema:
-                    continue
-                # 最少需要 name
-                if "name" not in schema:
-                    schema = {"name": tool_name, **schema}
-                declarations.append(schema)
-            if not declarations:
-                return None
-            return [{"function_declarations": declarations}]
-        except Exception as e:
-            logger.debug("Failed to build tool declarations: %s", e)
-            return None
+    # LangChain 相关逻辑已移除
 
     async def execute(self, context: str) -> Dict:
         """执行Agent任务"""
         try:
-            # 工具循环（最多 max_steps）
-            running_summary = []
+            # 工具循环 + 最终回答
+            running_summary: List[Dict[str, Any]] = []
             cur_prompt = self._build_full_prompt(context)
+            # 工具失败自动重试次数（通用，不特化工具）
+            try:
+                self.max_retries = int(config_loader.get("google_adk.max_tool_retries", 3))
+            except Exception:
+                self.max_retries = 3
 
             for step_index in range(self.max_steps):
-                # 让模型先提议是否需要调用工具
+                logger.debug("[Agent] step=%d prompt(head)=%r", step_index+1, cur_prompt[:300])
                 proposed = await self.llm.propose_tool_call(cur_prompt, tools=self._tools_declarations)
                 if not proposed:
-                    # 无函数调用建议，直接生成最终回答
-                    final_text = await self._generate_response(cur_prompt)
+                    logger.debug("[Agent] no tool proposed; stop without tool call")
+                    final_text = await self.llm.generate(cur_prompt, tools=self._tools_declarations)
+                    logger.debug("[Agent] final_text(head)=%r", (final_text or "")[:300])
                     result = self._process_response(final_text)
                     break
-
                 tool_name = proposed.get("name")
                 tool_args = proposed.get("arguments", {})
-                # 统一通过 MCP 执行
-                tool_output = await self.mcp.execute_tool(tool_name, tool_args)
+                logger.debug("[Agent] proposed tool=%s args=%s", tool_name, tool_args)
 
-                running_summary.append({"step": step_index + 1, "action": tool_name, "args": tool_args, "output": tool_output})
+                # 统一通过 call_tool 转发，endpoint 来自 schema
+                schema = self.tool_schemas.get(tool_name, {})
+                endpoint = schema.get("endpoint")
+                if isinstance(endpoint, str):
+                    # 解析 ${VAR:default}
+                    import re, os
+                    def _repl(m):
+                        var, default = m.group(1), m.group(2) or ""
+                        return os.getenv(var, default)
+                    endpoint = re.sub(r"\$\{([^:}]+):?([^}]*)\}", _repl, endpoint)
 
-                # 将工具输出拼接进后续提示，继续下一轮
-                cur_prompt = f"{cur_prompt}\n\n[工具调用结果 step={step_index+1} tool={tool_name}]\n{tool_output}"
+                call_params = {
+                    "endpoint": endpoint or "",
+                    "tool": tool_name,
+                    "args": tool_args or {},
+                }
+                # 通用重试：仅在失败时重试，成功即收敛
+                last_error: Optional[str] = None
+                tool_output: Any = None
+                for attempt in range(1, self.max_retries + 1):
+                    exec_result = await self.mcp.execute_tool("call_tool", call_params)
+                    if exec_result and exec_result.get("success"):
+                        tool_output = exec_result
+                        break
+                    last_error = (exec_result or {}).get("error") or "unknown error"
+                    logger.warning("[Agent] tool '%s' failed attempt %d/%d: %s", tool_name, attempt, self.max_retries, last_error)
+                if tool_output is None:
+                    # 多次失败后返回错误
+                    running_summary.append({
+                        "step": step_index + 1,
+                        "action": tool_name,
+                        "args": tool_args,
+                        "output": {"success": False, "error": last_error},
+                    })
+                    return {"success": False, "error": f"Tool '{tool_name}' failed after {self.max_retries} attempts: {last_error}"}
+
+                logger.debug("[Agent] tool_output(head)=%r", (str(tool_output) or "")[:300])
+                running_summary.append({
+                    "step": step_index + 1,
+                    "action": tool_name,
+                    "args": tool_args,
+                    "output": tool_output,
+                })
+                # 成功一次后收敛
+                cur_prompt = (
+                    f"{cur_prompt}\n\n[工具调用结果 step={step_index+1} tool={tool_name}]\n"
+                    f"{tool_output}\n\n请基于以上结果给出最终答复。"
+                )
+                final_text = await self.llm.generate(cur_prompt, tools=self._tools_declarations)
+                logger.debug("[Agent] final_text(head)=%r", (final_text or "")[:300])
+                result = self._process_response(final_text)
+                break
             else:
-                # 达到最大步数后，生成总结
-                final_text = await self._generate_response(cur_prompt)
+                # 达到步数上限后给出总结
+                final_text = await self.llm.generate(cur_prompt, tools=self._tools_declarations)
                 result = self._process_response(final_text)
             
             # 记录对话历史
@@ -145,13 +182,27 @@ class ReactAgent:
 """
     
     async def _generate_response(self, prompt: str) -> str:
-        """生成响应"""
-        # 纯 Gemini 路径
+        """生成响应：统一通过 llm_client 生成。"""
+        return await self.llm.generate(prompt, tools=self._tools_declarations)
 
-        # 调用 Gemini：若有 tools 声明，传入以启用原生函数调用提示（单轮）。
-        tools_kw = self._tools_declarations if self._tools_declarations else None
-        text = await self.llm.generate(prompt, tools=tools_kw)
-        return text
+    def _build_tool_declarations(self) -> Optional[List[Dict[str, Any]]]:
+        """将 tool_schemas 转换为 LLM 可理解的 function_declarations 列表包装。
+        返回格式：[{"function_declarations": [schema...]}] 或 None
+        """
+        try:
+            decls: List[Dict[str, Any]] = []
+            for name in self.tools:
+                schema = self.tool_schemas.get(name)
+                if not schema:
+                    continue
+                if "name" not in schema:
+                    schema = {"name": name, **schema}
+                decls.append(schema)
+            if not decls:
+                return None
+            return [{"function_declarations": decls}]
+        except Exception:
+            return None
     
     def _process_response(self, response: str) -> Dict:
         """处理响应"""
@@ -181,8 +232,8 @@ class ReactAgent:
             return lines[-1]
         return "执行完成"
 
-class ADKIntegration:
-    """Google ADK集成"""
+class AgentRuntime:
+    """Agent 执行运行时（代替 ADKIntegration 名称）"""
     
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -190,8 +241,8 @@ class ADKIntegration:
         self._initialize_adk()
     
     def _initialize_adk(self):
-        """初始化ADK"""
-        logger.info("ADK container initialized (provider via LLMClient)")
+        """初始化运行时（兼容旧 ADK 接口占位）"""
+        logger.info("AgentRuntime initialize (using LLM client abstraction)")
     
     def create_react_agent(self, config: Dict) -> ReactAgent:
         """创建ReAct Agent"""
@@ -199,11 +250,10 @@ class ADKIntegration:
             agent = ReactAgent(
                 system_prompt=config["system_prompt"],
                 tools=config["tools"],
-                model=config.get("model", "gemini-pro"),
                 tool_registry=config.get("tool_registry", {}),
                 tool_schemas=config.get("tool_schemas", {}),
             )
-            
+
             agent_id = config.get("agent_id", f"agent_{len(self.agents)}")
             self.agents[agent_id] = agent
             
@@ -229,3 +279,29 @@ class ADKIntegration:
             raise ValueError(f"Agent {agent_id} not found")
         
         return await agent.execute(context)
+
+    async def execute_agent_with_context(self, agent_id: str, action_prompt: str, plan_context: Dict[str, Any]) -> Dict:
+        """携带结构化上下文执行：优先直接通过 MCP 调用第一个工具（用于测试/简单场景）。"""
+        agent = self.get_agent(agent_id)
+        if not agent:
+            raise ValueError(f"Agent {agent_id} not found")
+        # 若存在工具声明，直接调用第一个工具
+        tool_name: Optional[str] = (agent.tools[0] if agent.tools else None)
+        if tool_name and tool_name in agent.tool_schemas:
+            schema = agent.tool_schemas.get(tool_name, {})
+            endpoint = schema.get("endpoint", "")
+            # 取主任务001的上下文值作为参数（示例/约定）
+            args = (
+                (plan_context.get("tasks", {}).get("001", {})
+                 .get("context", {}).get("values", {})) or {}
+            )
+            try:
+                client = MCPClient()
+                res = await client.execute_tool("call_tool", {"endpoint": endpoint, "tool": tool_name, "args": args})
+                return res or {"success": True, "result": {}}
+            except Exception as e:
+                logger.error("execute_agent_with_context MCP error: %s", e)
+                return {"success": False, "error": str(e)}
+        # 否则回退到文本上下文执行
+        full_context = f"{action_prompt}\n\n{plan_context}"
+        return await agent.execute(full_context)

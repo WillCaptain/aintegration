@@ -14,6 +14,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.utils.logger import setup_logging, get_logger
 from src.utils.config import load_config
 from src.api import planner_router, task_router, plan_router
+from src.database.memory_repositories import MemoryDatabaseConnection
+from src.core.plan_module import PlanModule
+from src.core.biz_agent import BizAgentModule
+from src.infrastructure.mcp_server import MCPServer
+from src.infrastructure.mcp_client import MCPClient
+from src.infrastructure.a2a_server import A2AServer
+from src.infrastructure.adk_integration import AgentRuntime
 from src.api.email_api import router as email_router
 
 # 设置日志
@@ -39,16 +46,28 @@ async def lifespan(app: FastAPI):
         config = load_config()
         logger.info("Configuration loaded successfully")
         
-        # 初始化数据库连接
-        # TODO: 实现数据库连接初始化
-        logger.info("Database connection initialized")
+        # 初始化数据库连接（内存实现）
+        db = MemoryDatabaseConnection()
+        logger.info("Database connection initialized (memory)")
         
-        # 初始化各个模块
-        # TODO: 实现模块初始化
+        # 初始化基础设施：MCP Server / Client，A2A Server，ADK
+        mcp_server = MCPServer(host=config.get_string("mcp_server.host", "127.0.0.1"), port=config.get_int("mcp_server.port", 8004))
+        # 从 config/apps 目录加载所有工具
+        load_res = mcp_server.load_tools_from_directory("config/apps")
+        logger.info("MCP tools loaded: %s", load_res)
+
+        mcp_client = MCPClient()
+        a2a_server = A2AServer(host=config.get_string("a2a_server.host", "127.0.0.1"), port=config.get_int("a2a_server.port", 8005))
+        adk = AgentRuntime(api_key=config.get_string("google_adk.api_key", ""))
+
+        # 初始化核心模块
+        plan_module = PlanModule(db.plan_repo, db.task_repo, db.listener_repo, adk_integration=adk)
+        atom_agent_module = BizAgentModule(mcp_server=mcp_server, a2a_server=a2a_server, adk_integration=adk)
         logger.info("Core modules initialized")
         
         # 启动模块
-        # TODO: 启动各个模块
+        await plan_module.start()
+        await atom_agent_module.start()
         logger.info("Core modules started")
         
         logger.info("AIntegration system started successfully")
@@ -64,12 +83,16 @@ async def lifespan(app: FastAPI):
         logger.info("Stopping AIntegration system...")
         
         # 停止各个模块
-        # TODO: 停止各个模块
-        logger.info("Core modules stopped")
+        try:
+            if atom_agent_module:
+                await atom_agent_module.stop()
+            if plan_module:
+                await plan_module.stop()
+        finally:
+            logger.info("Core modules stopped")
         
-        # 关闭数据库连接
-        # TODO: 关闭数据库连接
-        logger.info("Database connection closed")
+        # 关闭数据库连接（内存实现无需处理）
+        logger.info("Database connection closed (memory)")
         
         logger.info("AIntegration system stopped")
 

@@ -11,7 +11,7 @@
 from .task_listener import TaskListenerModule, TaskStateManager, ListenerScheduler
 from .plan_module import PlanModule, PlanManager, TaskManager, ListenerManager
 from .planner import PlannerModule
-from .atom_agent import AtomAgentModule
+from .biz_agent import BizAgentModule
 
 __all__ = [
     "TaskListenerModule",
@@ -22,5 +22,5 @@ __all__ = [
     "TaskManager",
     "ListenerManager",
     "PlannerModule",
-    "AtomAgentModule"
+    "BizAgentModule"
 ]

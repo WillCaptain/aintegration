@@ -4,7 +4,7 @@
 
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from enum import Enum
 
 class TaskStatus(Enum):
@@ -23,9 +23,11 @@ class Task:
     name: str
     prompt: str
     status: str
-    context: Dict
+    context: Dict[str, Any]
     created_at: datetime
     updated_at: Optional[datetime] = None
+    is_main_task: bool = False
+    parent_task_id: Optional[str] = None
     
     def to_dict(self) -> Dict:
         """转换为字典"""
@@ -64,3 +66,43 @@ class Task:
     def is_pending(self) -> bool:
         """检查任务是否等待中"""
         return self.status == TaskStatus.PENDING.value
+    
+    def update_status(self, new_status: str, context_updates: Optional[Dict[str, Any]] = None):
+        """更新任务状态和上下文"""
+        self.status = new_status
+        if context_updates:
+            self.context.update(context_updates)
+        self.updated_at = datetime.now()
+    
+    def get_context_value(self, key: str, default: Any = None) -> Any:
+        """获取上下文中的值"""
+        return self.context.get("values", {}).get(key, default)
+    
+    def set_context_value(self, key: str, value: Any):
+        """设置上下文中的值"""
+        if "values" not in self.context:
+            self.context["values"] = {}
+        self.context["values"][key] = value
+        self.updated_at = datetime.now()
+    
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        """获取元数据"""
+        return self.context.get("metadata", {})
+    
+    @metadata.setter
+    def metadata(self, value: Dict[str, Any]):
+        """设置元数据"""
+        self.context["metadata"] = value
+        self.updated_at = datetime.now()
+    
+    def can_transition_to(self, target_status: str) -> bool:
+        """检查是否可以转换到目标状态"""
+        valid_transitions = {
+            TaskStatus.NOT_STARTED.value: [TaskStatus.RUNNING.value, TaskStatus.ERROR.value],
+            TaskStatus.RUNNING.value: [TaskStatus.DONE.value, TaskStatus.ERROR.value, TaskStatus.PENDING.value],
+            TaskStatus.PENDING.value: [TaskStatus.RUNNING.value, TaskStatus.DONE.value, TaskStatus.ERROR.value],
+            TaskStatus.DONE.value: [],  # 完成状态不能转换
+            TaskStatus.ERROR.value: [TaskStatus.RUNNING.value, TaskStatus.PENDING.value]  # 错误状态可以重试
+        }
+        return target_status in valid_transitions.get(self.status, [])

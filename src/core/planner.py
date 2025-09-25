@@ -67,6 +67,55 @@ class RequestHandler:
             "entities": intent["entities"]
         }
         return await self.plan_module.plan_manager.search_plans(criteria)
+    
+    async def _execute_plan(self, plan: Plan, user_request: str) -> Execution:
+        """执行现有计划"""
+        try:
+            # 创建执行记录
+            execution = Execution(
+                id=f"exec_{plan.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                plan_id=plan.id,
+                user_request=user_request,
+                status="running",
+                created_at=datetime.now()
+            )
+            await self.execution_repo.create(execution)
+            
+            # 执行计划
+            result = await self.plan_module.execute_plan(plan.id)
+            
+            # 更新执行状态
+            if result["success"]:
+                execution.status = "completed"
+            else:
+                execution.status = "error"
+                execution.error_message = result.get("error", "Unknown error")
+            
+            execution.completed_at = datetime.now()
+            await self.execution_repo.update(execution.id, {
+                "status": execution.status,
+                "completed_at": execution.completed_at,
+                "error_message": execution.error_message
+            })
+            
+            return execution
+            
+        except Exception as e:
+            logger.error(f"Error executing plan {plan.id}: {e}")
+            raise
+    
+    async def _create_and_execute_plan(self, intent: Dict, user_request: str) -> Execution:
+        """创建并执行新计划"""
+        try:
+            # 生成计划
+            plan = await self.plan_generator.create_plan_from_intent(intent)
+            
+            # 执行计划
+            return await self._execute_plan(plan, user_request)
+            
+        except Exception as e:
+            logger.error(f"Error creating and executing plan: {e}")
+            raise
 
 class PlanGenerator:
     """计划生成器"""

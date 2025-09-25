@@ -6,6 +6,7 @@
 
 import logging
 from typing import Dict, List, Optional, Any
+import copy
 from datetime import datetime
 from collections import defaultdict
 
@@ -22,6 +23,8 @@ class MemoryPlanRepository:
     def __init__(self):
         self.plans = {}
         self.next_id = 1
+        # 版本历史：plan_id -> [config_snapshot, ...]
+        self.plan_versions: Dict[str, List[Dict[str, Any]]] = {}
     
     async def create(self, plan: Plan) -> str:
         """创建计划"""
@@ -30,8 +33,12 @@ class MemoryPlanRepository:
             self.next_id += 1
             
             plan.id = plan_id
-            plan.created_at = datetime.now()
+            # 只有在没有设置created_at时才使用当前时间
+            if plan.created_at is None:
+                plan.created_at = datetime.now()
             self.plans[plan_id] = plan
+            # 初始化版本历史（保存创建时的快照）
+            self.plan_versions[plan_id] = [copy.deepcopy(plan.config)]
             
             logger.info(f"Memory: Created plan {plan_id}")
             return plan_id
@@ -47,15 +54,38 @@ class MemoryPlanRepository:
             logger.error(f"Memory: Failed to get plan {plan_id}: {e}")
             raise
     
-    async def update(self, plan_id: str, updates: Dict):
+    async def update(self, plan_id: str, updates: Dict, expected_version: Optional[str] = None):
         """更新计划"""
         try:
             if plan_id in self.plans:
                 plan = self.plans[plan_id]
+                # 乐观锁：校验预期版本（如果提供）
+                if expected_version is not None:
+                    current_version = None
+                    try:
+                        current_version = plan.config.get("metadata", {}).get("version")
+                    except Exception:
+                        current_version = None
+                    if current_version != expected_version:
+                        raise Exception(f"version conflict: expected={expected_version}, current={current_version}")
+                def deep_merge(dst, src):
+                    for k, v in src.items():
+                        if (
+                            k in dst and isinstance(dst[k], dict) and isinstance(v, dict)
+                        ):
+                            deep_merge(dst[k], v)
+                        else:
+                            dst[k] = v
+
                 for key, value in updates.items():
-                    if hasattr(plan, key):
+                    if key == "config" and isinstance(value, dict):
+                        deep_merge(plan.config, value)
+                    elif hasattr(plan, key):
                         setattr(plan, key, value)
                 plan.updated_at = datetime.now()
+                # 追加最新版本快照
+                self.plan_versions.setdefault(plan_id, [])
+                self.plan_versions[plan_id].append(copy.deepcopy(plan.config))
                 logger.info(f"Memory: Updated plan {plan_id}")
         except Exception as e:
             logger.error(f"Memory: Failed to update plan {plan_id}: {e}")
@@ -76,17 +106,134 @@ class MemoryPlanRepository:
         try:
             results = []
             for plan in self.plans.values():
-                # 简化搜索逻辑
+                # 软删过滤（除非显式包含）
+                include_deleted = bool(criteria.get("include_deleted"))
+                is_deleted = False
+                try:
+                    # 兼容两种元数据路径：顶层metadata或config.metadata
+                    meta = {}
+                    try:
+                        meta = plan.config.get("config", {}).get("metadata", {})
+                    except Exception:
+                        meta = {}
+                    if not meta:
+                        meta = plan.config.get("metadata", {})
+                    is_deleted = meta.get("deleted") is True
+                except Exception:
+                    is_deleted = False
+                if is_deleted and not include_deleted:
+                    continue
+                
+                # 名称过滤
+                if criteria.get("name"):
+                    name_pattern = criteria["name"].lower()
+                    if name_pattern not in plan.name.lower():
+                        continue
+                
+                # 标签过滤
+                if criteria.get("tags"):
+                    required_tags = criteria["tags"]
+                    if not isinstance(required_tags, list):
+                        required_tags = [required_tags]
+                    
+                    plan_tags = []
+                    try:
+                        meta = plan.config.get("config", {}).get("metadata", {}) or plan.config.get("metadata", {})
+                        plan_tags = meta.get("tags", [])
+                        if not isinstance(plan_tags, list):
+                            plan_tags = []
+                    except Exception:
+                        plan_tags = []
+                    
+                    # 所有要求的标签都必须存在
+                    if not all(tag in plan_tags for tag in required_tags):
+                        continue
+                
+                # 状态过滤
+                if criteria.get("status"):
+                    required_status = criteria["status"]
+                    plan_status = None
+                    try:
+                        meta = plan.config.get("config", {}).get("metadata", {}) or plan.config.get("metadata", {})
+                        plan_status = meta.get("status")
+                    except Exception:
+                        plan_status = None
+                    
+                    if plan_status != required_status:
+                        continue
+                
+                # 时间范围过滤
+                if criteria.get("created_after"):
+                    try:
+                        from datetime import datetime
+                        created_after = datetime.fromisoformat(criteria["created_after"].replace('Z', '+00:00'))
+                        # 仅包含在该时间之后（含等于）的计划
+                        if plan.created_at and plan.created_at < created_after:
+                            continue
+                    except Exception:
+                        pass
+                
+                if criteria.get("created_before"):
+                    try:
+                        from datetime import datetime
+                        created_before = datetime.fromisoformat(criteria["created_before"].replace('Z', '+00:00'))
+                        # 仅包含在该时间之前（含等于）的计划
+                        if plan.created_at and plan.created_at > created_before:
+                            continue
+                    except Exception:
+                        pass
+                
+                # 全文搜索
                 if criteria.get("query"):
                     query = criteria["query"].lower()
-                    if (query in plan.name.lower() or 
-                        query in plan.description.lower()):
-                        results.append(plan)
-                else:
-                    results.append(plan)
+                    searchable_text = f"{plan.name} {plan.description}".lower()
+                    if query not in searchable_text:
+                        continue
+                
+                results.append(plan)
+            
+            # 排序
+            sort_by = criteria.get("sort_by", "created_at")
+            sort_order = criteria.get("sort_order", "desc")
+            
+            if sort_by == "name":
+                results.sort(key=lambda x: x.name, reverse=(sort_order == "desc"))
+            elif sort_by == "created_at":
+                results.sort(key=lambda x: x.created_at or datetime.min, reverse=(sort_order == "desc"))
+            elif sort_by == "updated_at":
+                results.sort(key=lambda x: x.updated_at or datetime.min, reverse=(sort_order == "desc"))
+            
+            # 分页
+            limit = criteria.get("limit")
+            offset = criteria.get("offset", 0)
+            
+            if limit is not None:
+                results = results[offset:offset + limit]
+            elif offset > 0:
+                results = results[offset:]
+            
             return results
         except Exception as e:
             logger.error(f"Memory: Failed to search plans: {e}")
+            raise
+
+    async def soft_delete(self, plan_id: str) -> bool:
+        """软删除：在metadata.deleted打标，不物理移除"""
+        try:
+            if plan_id not in self.plans:
+                return False
+            plan = self.plans[plan_id]
+            if "metadata" not in plan.config or not isinstance(plan.config.get("metadata"), dict):
+                plan.config["metadata"] = {}
+            plan.config["metadata"]["deleted"] = True
+            plan.updated_at = datetime.now()
+            # 记录快照
+            self.plan_versions.setdefault(plan_id, [])
+            self.plan_versions[plan_id].append(copy.deepcopy(plan.config))
+            logger.info(f"Memory: Soft-deleted plan {plan_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Memory: Failed to soft delete plan {plan_id}: {e}")
             raise
     
     async def list_all(self, limit: int = 100, offset: int = 0) -> List[Plan]:
@@ -96,6 +243,42 @@ class MemoryPlanRepository:
             return plans_list[offset:offset + limit]
         except Exception as e:
             logger.error(f"Memory: Failed to list plans: {e}")
+            raise
+
+    async def get_versions(self, plan_id: str) -> List[Dict[str, Any]]:
+        """获取计划的版本历史（按时间顺序）"""
+        try:
+            return [copy.deepcopy(cfg) for cfg in self.plan_versions.get(plan_id, [])]
+        except Exception as e:
+            logger.error(f"Memory: Failed to get plan versions {plan_id}: {e}")
+            raise
+
+    async def rollback(self, plan_id: str, target_version: str) -> bool:
+        """回滚到某个版本号（按 metadata.version 匹配）"""
+        try:
+            if plan_id not in self.plans:
+                return False
+            history = self.plan_versions.get(plan_id, [])
+            target_snapshot = None
+            for snapshot in history:
+                try:
+                    if snapshot.get("metadata", {}).get("version") == target_version:
+                        target_snapshot = snapshot
+                except Exception:
+                    continue
+            if target_snapshot is None:
+                return False
+            # 应用回滚
+            plan = self.plans[plan_id]
+            plan.config = copy.deepcopy(target_snapshot)
+            plan.updated_at = datetime.now()
+            # 记录一次回滚后的快照
+            self.plan_versions.setdefault(plan_id, [])
+            self.plan_versions[plan_id].append(copy.deepcopy(plan.config))
+            logger.info(f"Memory: Rolled back plan {plan_id} to version {target_version}")
+            return True
+        except Exception as e:
+            logger.error(f"Memory: Failed to rollback plan {plan_id}: {e}")
             raise
     
     async def get_few_shot_examples(self) -> List[Dict]:

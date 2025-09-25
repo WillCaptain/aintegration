@@ -417,7 +417,7 @@ a2a_server:
 
 ### 6.3 Google ADK集成
 ```python
-class ADKIntegration:
+class AgentRuntime:
     def __init__(self):
         self.adk_client = GoogleADKClient()
     

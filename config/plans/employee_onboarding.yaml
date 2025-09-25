@@ -1,0 +1,237 @@
+# 新员工入职计划配置示例
+plan_id: "employee_onboarding_v1"
+name: "新员工入职计划"
+description: "新员工入职的完整流程，包括HR注册、IT申请、门禁开通等"
+main_task_id: "001"
+
+tasks:
+  - task_id: "001"
+    name: "新员工完成入职"
+    prompt: "新员工入职"
+    is_main_task: true
+    
+  - task_id: "002"
+    name: "新员工注册"
+    prompt: "新员工在Hr系统中完成新员工注册"
+    
+  - task_id: "003"
+    name: "申请电脑"
+    prompt: "新员工在IT系统中完成电脑申请"
+    
+  - task_id: "004"
+    name: "电脑出库"
+    prompt: "电脑出库"
+    
+  - task_id: "005"
+    name: "门禁申请"
+    prompt: "新员工在门禁系统里完成门禁权限申请"
+    
+  - task_id: "006"
+    name: "发送欢迎邮件"
+    prompt: "通过EmailAgent发送新员工欢迎邮件"
+    
+  - task_id: "007"
+    name: "生成劳动合同"
+    prompt: "通过DocAgent生成并发送劳动合同"
+
+listeners:
+  - listener_id: "L001"
+    trigger_task_id: "001"
+    trigger_condition: "001.status == Running"
+    action_condition: "true"
+    listener_type: "agent"
+    agent_id: "hr_agent_v1"
+    action_prompt: "根据员工身份证号{001.context.id}、姓名{001.context.name}在HR系统中创建员工记录，确定员工级别"
+    success_output:
+      task_id: "002"
+      status: "Done"
+      context:
+        emp_id: "{{result.emp_id}}"
+        level: "{{result.level}}"
+    failure_output:
+      task_id: "002"
+      status: "Error"
+      context:
+        error: "HR系统连接失败"
+    priority: 1
+
+  - listener_id: "L002"
+    trigger_task_id: "001"
+    trigger_condition: "001.status == Running"
+    action_condition: "true"
+    listener_type: "agent"
+    agent_id: "access_agent_v1"
+    action_prompt: "根据员工ID{001.context.id}为新员工申请门禁权限，输入员工姓名{001.context.name}"
+    success_output:
+      task_id: "005"
+      status: "Done"
+      context:
+        access_id: "{{result.access_id}}"
+        card_no: "{{result.card_no}}"
+    failure_output:
+      task_id: "005"
+      status: "Error"
+      context:
+        error: "门禁系统异常"
+    priority: 2
+
+  - listener_id: "L003"
+    trigger_task_id: "002"
+    trigger_condition: "002.status == Done"
+    action_condition: "true"
+    listener_type: "agent"
+    agent_id: "it_agent_v1"
+    action_prompt: "根据员工ID{002.context.emp_id}和员工级别{002.context.level}申请相应配置的笔记本"
+    success_output:
+      task_id: "003"
+      status: "NotStarted"
+      context:
+        pc_model: "{{result.pc_model}}"
+        request_id: "{{result.request_id}}"
+    failure_output:
+      task_id: "003"
+      status: "Error"
+      context:
+        error: "IT系统维护中"
+    priority: 1
+
+  - listener_id: "L004"
+    trigger_task_id: "002"
+    trigger_condition: "002.status == Done"
+    action_condition: "true"
+    listener_type: "agent"
+    agent_id: "email_agent_v1"
+    action_prompt: "向员工邮箱{002.context.email}发送新员工欢迎邮件，员工姓名{002.context.name}，部门{002.context.department}"
+    success_output:
+      task_id: "006"
+      status: "Done"
+      context:
+        email_sent: true
+        message_id: "{{result.message_id}}"
+    failure_output:
+      task_id: "006"
+      status: "Error"
+      context:
+        error: "邮件服务不可用"
+    priority: 2
+
+  - listener_id: "L005"
+    trigger_task_id: "002"
+    trigger_condition: "002.status == Done"
+    action_condition: "true"
+    listener_type: "agent"
+    agent_id: "doc_agent_v1"
+    action_prompt: "为员工{002.context.name}生成劳动合同，员工ID{002.context.emp_id}，级别{002.context.level}"
+    success_output:
+      task_id: "007"
+      status: "Done"
+      context:
+        contract_id: "{{result.contract_id}}"
+        signed: true
+    failure_output:
+      task_id: "007"
+      status: "Error"
+      context:
+        error: "文档生成失败"
+    priority: 3
+
+  - listener_id: "L006"
+    trigger_task_id: "003"
+    trigger_condition: "003.status == NotStarted"
+    action_condition: "true"
+    listener_type: "agent"
+    agent_id: "inventory_agent_v1"
+    action_prompt: "根据IT申请{003.context.pc_model}创建电脑出库单，等待员工领取"
+    success_output:
+      task_id: "003"
+      status: "Pending"
+      context:
+        outbound_id: "{{result.outbound_id}}"
+        pc_no: "{{result.pc_no}}"
+    failure_output:
+      task_id: "003"
+      status: "Error"
+      context:
+        error: "库存不足，型号{003.context.pc_model}缺货"
+    priority: 1
+
+  - listener_id: "L007"
+    trigger_task_id: "003"
+    trigger_condition: "003.status == Pending"
+    action_condition: "true"
+    listener_type: "code"
+    code_snippet: |
+      # 检查出库单领取状态
+      outbound_id = context.get('values', {}).get('outbound_id')
+      if outbound_id:
+          # 模拟检查领取状态
+          import random
+          picked_up = random.choice([True, False])
+          if picked_up:
+              result = {
+                  'picked_up': True,
+                  'pickup_time': '2024-01-01 10:00:00'
+              }
+          else:
+              result = {
+                  'picked_up': False,
+                  'last_check': '2024-01-01 10:00:00'
+              }
+      else:
+          result = {'error': 'No outbound_id found'}
+    success_output:
+      task_id: "003"
+      status: "Done"
+      context:
+        picked_up: "{{result.picked_up}}"
+        pickup_time: "{{result.pickup_time}}"
+    failure_output:
+      task_id: "003"
+      status: "Pending"
+      context:
+        picked_up: "{{result.picked_up}}"
+        last_check: "{{result.last_check}}"
+    priority: 1
+
+  - listener_id: "L008"
+    trigger_task_id: "003,005,006,007"
+    trigger_condition: "Any"
+    action_condition: "003.status == Done && 005.status == Done && 006.status == Done && 007.status == Done"
+    listener_type: "code"
+    code_snippet: |
+      # 检查新员工入职手续完成情况
+      tasks = context.get('tasks', {})
+      completion_status = {
+          'computer_picked': tasks.get('003', {}).get('status') == 'Done',
+          'access_granted': tasks.get('005', {}).get('status') == 'Done',
+          'email_sent': tasks.get('006', {}).get('status') == 'Done',
+          'contract_generated': tasks.get('007', {}).get('status') == 'Done'
+      }
+      
+      all_complete = all(completion_status.values())
+      
+      if all_complete:
+          result = {
+              'onboarding_complete': True,
+              'completion_time': '2024-01-01 10:00:00',
+              'details': completion_status
+          }
+      else:
+          pending_tasks = [k for k, v in completion_status.items() if not v]
+          result = {
+              'onboarding_complete': False,
+              'pending_tasks': pending_tasks,
+              'details': completion_status
+          }
+    success_output:
+      task_id: "001"
+      status: "Done"
+      context:
+        onboarding_complete: "{{result.onboarding_complete}}"
+        completion_time: "{{result.completion_time}}"
+    failure_output:
+      task_id: "001"
+      status: "Pending"
+      context:
+        pending_tasks: "{{result.pending_tasks}}"
+    priority: 1

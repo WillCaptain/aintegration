@@ -1,0 +1,18 @@
+name: hr
+system_context: "你是一个HR系统的专业代理，负责处理员工入职相关的所有操作"
+tools:
+  - name: create_employee_profile
+    description: 在HR系统中创建员工档案
+    endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
+    parameters:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        department:
+          type: string
+      required: [id, name, department]
+
+

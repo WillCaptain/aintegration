@@ -1,0 +1,16 @@
+name: it
+system_context: "你是一个IT系统的专业代理，负责处理电脑申请和账号创建等操作"
+tools:
+  - name: apply_computer
+    description: 根据员工级别申请电脑
+    endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
+    parameters:
+      type: object
+      properties:
+        emp_id:
+          type: string
+        level:
+          type: string
+      required: [emp_id, level]
+
+
