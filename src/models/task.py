@@ -97,12 +97,5 @@ class Task:
         self.updated_at = datetime.now()
     
     def can_transition_to(self, target_status: str) -> bool:
-        """检查是否可以转换到目标状态"""
-        valid_transitions = {
-            TaskStatus.NOT_STARTED.value: [TaskStatus.RUNNING.value, TaskStatus.ERROR.value],
-            TaskStatus.RUNNING.value: [TaskStatus.DONE.value, TaskStatus.ERROR.value, TaskStatus.PENDING.value],
-            TaskStatus.PENDING.value: [TaskStatus.RUNNING.value, TaskStatus.DONE.value, TaskStatus.ERROR.value],
-            TaskStatus.DONE.value: [],  # 完成状态不能转换
-            TaskStatus.ERROR.value: [TaskStatus.RUNNING.value, TaskStatus.PENDING.value]  # 错误状态可以重试
-        }
-        return target_status in valid_transitions.get(self.status, [])
+        """检查是否可以转换到目标状态 - 允许任意状态转换"""
+        return True

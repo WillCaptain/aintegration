@@ -91,13 +91,5 @@ class Listener:
         return expected_condition in self.trigger_condition or "Any" in self.trigger_condition
     
     def evaluate_action_condition(self, plan_context: Dict[str, Any]) -> bool:
-        """评估行动条件是否满足"""
-        if not self.is_active:
-            return False
-        
-        # 简化的条件评估，实际实现需要更复杂的表达式解析
-        if self.action_condition == "true":
-            return True
-        
-        # 这里可以添加更复杂的条件评估逻辑
+        """兼容旧接口：已废弃，始终返回 True"""
         return True

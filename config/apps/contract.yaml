@@ -1,0 +1,20 @@
+name: contract
+system_context: "你是一个合同生成与下发系统的专业代理"
+tools:
+  - name: generate_contract
+    description: 生成劳动合同并输出PDF链接
+    endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
+    parameters:
+      type: object
+      properties:
+        employee_name:
+          type: string
+        position:
+          type: string
+        start_date:
+          type: string
+        email:
+          type: string
+      required: [employee_name, position, start_date]
+
+

@@ -27,46 +27,56 @@ class TaskDriver:
     async def execute_listener(self, listener: Listener, plan_context: Dict[str, Any]) -> Dict[str, Any]:
         """执行侦听器"""
         try:
+            print(f"[TaskDriver] 开始执行侦听器 {listener.id}, 类型: {listener.listener_type}")
             logger.info(f"Executing listener {listener.id} of type {listener.listener_type}")
             
-            # 检查行动条件
-            if not listener.evaluate_action_condition(plan_context):
-                logger.info(f"Action condition not met for listener {listener.id}")
-                return {"success": False, "reason": "action_condition_not_met"}
+            # 新机制：不再校验 action_condition，触发即评估 trigger_condition 并执行
+            print(f"[TaskDriver] 侦听器 {listener.id} 触发，开始执行")
             
             # 根据侦听器类型执行
             if listener.is_agent_listener():
+                print(f"[TaskDriver] 执行 Agent 侦听器 {listener.id}, agent_id: {listener.agent_id}")
                 return await self._execute_agent_listener(listener, plan_context)
             elif listener.is_code_listener():
+                print(f"[TaskDriver] 执行代码侦听器 {listener.id}")
                 return await self._execute_code_listener(listener, plan_context)
             else:
+                print(f"[TaskDriver] 未知侦听器类型: {listener.listener_type}")
                 logger.error(f"Unknown listener type: {listener.listener_type}")
                 return {"success": False, "reason": "unknown_listener_type"}
                 
         except Exception as e:
+            print(f"[TaskDriver] 执行侦听器 {listener.id} 时出错: {e}")
             logger.error(f"Error executing listener {listener.id}: {e}")
             return {"success": False, "error": str(e)}
     
     async def _execute_agent_listener(self, listener: Listener, plan_context: Dict[str, Any]) -> Dict[str, Any]:
         """执行智能体侦听器"""
         try:
+            print(f"[TaskDriver] 检查 Agent 配置: agent_id={listener.agent_id}, action_prompt={bool(listener.action_prompt)}")
+            
             if not listener.agent_id or not listener.action_prompt:
+                print(f"[TaskDriver] Agent 配置缺失")
                 return {"success": False, "reason": "missing_agent_config"}
             
             # 构建完整的提示词，包含上下文变量替换
             prompt = self._build_prompt_with_context(listener.action_prompt, plan_context)
+            print(f"[TaskDriver] 构建的提示词: {prompt[:200]}...")
             
             # 如果有ADK集成，使用ADK执行智能体
             if self.adk_integration:
+                print(f"[TaskDriver] 使用 ADK 集成执行 Agent")
                 # 尝试结构化上下文执行，便于直接命中工具
                 if hasattr(self.adk_integration, "execute_agent_with_context"):
                     return await self.adk_integration.execute_agent_with_context(listener.agent_id, prompt, plan_context)
                 return await self._execute_with_adk(listener.agent_id, prompt, plan_context)
             else:
-                # 使用LLM客户端执行
-                return await self._execute_with_llm(prompt, plan_context)
+                print(f"[TaskDriver] 没有 ADK 集成，使用 ReactAgent 直接执行")
+                # 使用 ReactAgent 直接执行
+                return await self._execute_with_adk(listener.agent_id, prompt, plan_context)
                 
         except Exception as e:
+            print(f"[TaskDriver] 执行 Agent 侦听器 {listener.id} 时出错: {e}")
             logger.error(f"Error executing agent listener {listener.id}: {e}")
             return {"success": False, "error": str(e)}
     
@@ -96,14 +106,29 @@ class TaskDriver:
     async def _execute_with_adk(self, agent_id: str, prompt: str, plan_context: Dict[str, Any]) -> Dict[str, Any]:
         """使用ADK执行智能体"""
         try:
-            # 这里需要根据实际的ADK集成接口调整
-            if hasattr(self.adk_integration, 'execute_agent'):
-                result = await self.adk_integration.execute_agent(agent_id, prompt, plan_context)
-                return self._process_agent_result(result)
-            else:
-                logger.warning("ADK integration does not support agent execution")
-                return await self._execute_with_llm(prompt, plan_context)
+            print(f"[TaskDriver] 开始创建 ReactAgent: agent_id={agent_id}")
+            
+            # 使用 ReactAgent 执行智能体
+            from src.infrastructure.adk_integration import ReactAgent
+            
+            # 创建 ReactAgent 实例，使用 agent_id 作为 app_name
+            agent = ReactAgent(
+                system_prompt=f"你是一个{agent_id}系统的专业代理",
+                app_name=agent_id
+            )
+            
+            print(f"[TaskDriver] ReactAgent 创建成功，开始执行: {prompt[:100]}...")
+            
+            # 执行 Agent
+            result = await agent.execute(prompt)
+            
+            print(f"[TaskDriver] ReactAgent 执行完成，结果: {result}")
+            return self._process_agent_result(result)
+            
         except Exception as e:
+            print(f"[TaskDriver] 执行 ReactAgent 时出错: {e}")
+            import traceback
+            print(f"[TaskDriver] 错误堆栈: {traceback.format_exc()}")
             logger.error(f"Error executing with ADK: {e}")
             return {"success": False, "error": str(e)}
     
@@ -196,6 +221,7 @@ class TaskDriver:
     
     def determine_task_updates(self, listener: Listener, execution_result: Dict[str, Any]) -> List[Dict[str, Any]]:
         """根据执行结果确定任务更新"""
+        print(f"[TaskDriver] 确定任务更新: listener={listener.id}, result={execution_result}")
         updates = []
         
         if execution_result.get("success", False):
@@ -204,6 +230,8 @@ class TaskDriver:
             target_status = listener.get_success_target_status()
             context_updates = listener.get_success_context()
             
+            print(f"[TaskDriver] 成功情况: target_task_id={target_task_id}, target_status={target_status}, context={context_updates}")
+            
             if target_task_id and target_status:
                 updates.append({
                     "task_id": target_task_id,
@@ -211,11 +239,16 @@ class TaskDriver:
                     "context": context_updates,
                     "execution_result": execution_result
                 })
+                print(f"[TaskDriver] 添加成功更新: {updates[-1]}")
+            else:
+                print(f"[TaskDriver] 成功情况但缺少目标任务或状态")
         else:
             # 失败情况
             target_task_id = listener.get_failure_target_task()
             target_status = listener.get_failure_target_status()
             context_updates = listener.get_failure_context()
+            
+            print(f"[TaskDriver] 失败情况: target_task_id={target_task_id}, target_status={target_status}, context={context_updates}")
             
             if target_task_id and target_status:
                 updates.append({
@@ -225,6 +258,10 @@ class TaskDriver:
                     "execution_result": execution_result,
                     "error": execution_result.get("error", "Unknown error")
                 })
+                print(f"[TaskDriver] 添加失败更新: {updates[-1]}")
+            else:
+                print(f"[TaskDriver] 失败情况但缺少目标任务或状态")
         
+        print(f"[TaskDriver] 最终更新列表: {updates}")
         return updates
     

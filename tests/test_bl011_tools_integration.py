@@ -17,6 +17,7 @@ def event_loop():
     yield loop
     loop.close()
 
+@pytest.mark.integration
 @pytest.mark.regression
 @pytest.mark.bl011
 class TestBL011ToolsIntegration:
@@ -45,6 +46,9 @@ class TestBL011ToolsIntegration:
     async def mock_api_once(self):
         """确保 Mock API 在本函数期间可用：若已在运行则复用，未运行则启动一次并保留至会话结束。"""
         import httpx
+        import os
+        # 设置 Mock API URL 环境变量
+        os.environ["MOCK_API_URL"] = "http://127.0.0.1:8009"
         log_dir = os.path.dirname(MOCK_LOG_FILE)
         os.makedirs(log_dir, exist_ok=True)
 

@@ -62,16 +62,20 @@ class ListenerEngine:
     
     async def _execution_loop(self):
         """执行循环"""
+        logger.info("侦听器引擎执行循环开始")
         while self.is_running:
             try:
                 # 等待任务状态变化事件
                 event = await asyncio.wait_for(self.execution_queue.get(), timeout=1.0)
+                logger.info(f"收到事件: {event}")
                 await self._process_event(event)
             except asyncio.TimeoutError:
                 # 超时，继续循环
                 continue
             except Exception as e:
                 logger.error(f"Error in execution loop: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 await asyncio.sleep(1)  # 避免快速循环
     
     async def _process_event(self, event: Dict[str, Any]):
@@ -138,16 +142,49 @@ class ListenerEngine:
             del self.active_plans[plan_id]
     
     async def _find_triggered_listeners(self, task_id: str, status: str, plan_context: Dict[str, Any]) -> List[Listener]:
-        """查找触发的侦听器"""
+        """查找触发的侦听器：支持 trigger_task_id 为列表；用 plan 上下文解析复合 trigger_condition"""
         try:
-            # 获取监听该任务的所有侦听器
             all_listeners = await self.listener_repo.get_by_trigger_task(task_id)
-            
-            triggered = []
+
+            def _eval_condition(expr: str) -> bool:
+                if not expr or expr.strip().lower() == "any":
+                    return True
+                parts = [p.strip() for p in expr.split("&&")]
+                for part in parts:
+                    if ".status ==" in part:
+                        tid, expected = part.split(".status ==")
+                        tid = tid.strip()
+                        expected = expected.strip()
+                        # 从计划上下文读取对应任务状态
+                        try:
+                            actual = plan_context["tasks"][tid]["status"]
+                        except Exception:
+                            return False
+                        if actual != expected:
+                            return False
+                    else:
+                        return False
+                return True
+
+            triggered: List[Listener] = []
             for listener in all_listeners:
-                if listener.evaluate_trigger_condition(status):
+                # 检查侦听器是否监听当前任务ID
+                listener_trigger_ids = []
+                if isinstance(listener.trigger_task_id, list):
+                    listener_trigger_ids = [str(x).strip() for x in listener.trigger_task_id]
+                elif isinstance(listener.trigger_task_id, str):
+                    if "," in listener.trigger_task_id:
+                        listener_trigger_ids = [x.strip() for x in listener.trigger_task_id.split(",")]
+                    else:
+                        listener_trigger_ids = [listener.trigger_task_id.strip()]
+                else:
+                    listener_trigger_ids = [str(listener.trigger_task_id).strip()]
+                
+                logger.debug(f"Check listener {listener.id}: trigger_ids={listener_trigger_ids}, expr='{listener.trigger_condition}' for event task={task_id} status={status}")
+                # 如果当前任务ID在侦听器的触发任务列表中，且满足触发条件
+                if task_id in listener_trigger_ids and _eval_condition(listener.trigger_condition or ""):
+                    logger.debug(f"Listener {listener.id} triggered by task {task_id} with status {status}")
                     triggered.append(listener)
-            
             return triggered
         except Exception as e:
             logger.error(f"Error finding triggered listeners: {e}")
@@ -160,17 +197,16 @@ class ListenerEngine:
         
         logger.info(f"Executing {len(listeners)} triggered listeners")
         
-        # 创建任务字典，保持listener和task的映射
-        task_to_listener = {}
+        # 创建任务列表
+        tasks = []
         for listener in listeners:
             task = asyncio.create_task(self.task_driver.execute_listener(listener, plan_context))
-            task_to_listener[task] = listener
+            tasks.append((listener, task))
         
         # 流式处理完成的任务
-        for completed_task in asyncio.as_completed(task_to_listener.keys()):
-            listener = task_to_listener[completed_task]
+        for listener, task in tasks:
             try:
-                result = await completed_task
+                result = await task
                 logger.info(f"Processing result for listener {listener.id}: {result}")
                 
                 # 确定任务更新
@@ -275,7 +311,7 @@ class ListenerEngine:
         }
         
         await self.execution_queue.put(event)
-        logger.debug(f"Triggered task status change event: {event}")
+        logger.info(f"Triggered task status change event: {event}")
     
     async def trigger_plan_start(self, plan_id: str):
         """触发计划启动事件"""
@@ -320,6 +356,7 @@ class ListenerEngine:
                     await self.trigger_plan_start(plan_id)
                     
                     # 触发主任务状态变化事件
+                    logger.info(f"准备触发任务状态变化事件: {plan.main_task_id}, {TaskStatus.NOT_STARTED.value} -> {TaskStatus.RUNNING.value}")
                     await self.trigger_task_status_change(
                         plan.main_task_id, 
                         TaskStatus.NOT_STARTED.value, 
@@ -335,6 +372,8 @@ class ListenerEngine:
             
         except Exception as e:
             logger.error(f"Error starting plan execution: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return False
     
     async def check_plan_completion(self, plan_id: str) -> bool:

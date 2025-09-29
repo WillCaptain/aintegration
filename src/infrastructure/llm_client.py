@@ -230,7 +230,7 @@ class BaseOpenAICompatibleClient(LLMClient):
                 payload["tool_choice"] = {"type": "function", "function": {"name": mapped_tools[0]["function"]["name"]}}
             else:
                 payload["tool_choice"] = "auto"
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             logger.debug("OpenAICompat.generate payload=%s", json.dumps(payload, ensure_ascii=False)[:1200])
             resp = await client.post(f"{self.base_url}/chat/completions", headers=self._headers(), json=payload)
             resp.raise_for_status()
@@ -263,7 +263,7 @@ class BaseOpenAICompatibleClient(LLMClient):
                 payload["tool_choice"] = {"type": "function", "function": {"name": mapped_tools[0]["function"]["name"]}}
             else:
                 payload["tool_choice"] = "auto"
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             logger.debug("OpenAICompat.propose payload=%s", json.dumps(payload, ensure_ascii=False)[:1200])
             resp = await client.post(f"{self.base_url}/chat/completions", headers=self._headers(), json=payload)
             resp.raise_for_status()

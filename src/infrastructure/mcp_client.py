@@ -98,11 +98,51 @@ class MCPClient:
     async def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """执行工具"""
         try:
+            print(f"[MCPClient] 开始执行工具: {tool_name}, 参数: {parameters}")
             logger.info(f"Executing {tool_name} with parameters: {parameters}")
+            
+            # 如果是 call_tool，直接调用 Mock API
+            if tool_name == "call_tool":
+                endpoint = parameters.get("endpoint", "")
+                tool = parameters.get("tool", "")
+                args = parameters.get("args", {})
+                
+                if endpoint and tool:
+                    print(f"[MCPClient] 直接调用 Mock API: {endpoint}, 工具: {tool}")
+                    import httpx
+                    async with httpx.AsyncClient(timeout=30) as client:
+                        response = await client.post(endpoint, json={
+                            "tool": tool,
+                            "args": args
+                        })
+                        response.raise_for_status()
+                        result = response.json()
+                        print(f"[MCPClient] Mock API 调用成功，结果: {result}")
+                        return {
+                            "success": True,
+                            "output": {
+                                "success": True,
+                                "result": result,
+                                "tool_name": tool
+                            }
+                        }
+            
+            # 其他情况使用原来的 MCP 客户端
             await self._ensure_client()
+            print(f"[MCPClient] 客户端已确保，开始调用工具")
             
             async with self._client:
-                result = await self._client.call_tool(tool_name, parameters)
+                print(f"[MCPClient] 进入客户端上下文，开始 call_tool")
+                import asyncio
+                try:
+                    result = await asyncio.wait_for(
+                        self._client.call_tool(tool_name, parameters),
+                        timeout=self.timeout_seconds
+                    )
+                    print(f"[MCPClient] call_tool 完成，结果类型: {type(result)}")
+                except asyncio.TimeoutError:
+                    print(f"[MCPClient] call_tool 超时，超时时间: {self.timeout_seconds}秒")
+                    raise Exception(f"Tool call timeout after {self.timeout_seconds} seconds")
                 
                 # 提取结果内容
                 if hasattr(result, 'content') and result.content:
@@ -112,6 +152,7 @@ class MCPClient:
                 else:
                     content = str(result)
                 
+                print(f"[MCPClient] 工具执行成功，内容: {content[:200]}...")
                 logger.info(f"Tool {tool_name} executed successfully")
                 return {
                     "success": True,
@@ -122,6 +163,7 @@ class MCPClient:
                     }
                 }
         except Exception as e:
+            print(f"[MCPClient] 工具执行失败: {e}")
             logger.error(f"Tool execution failed: {e}")
             return {"success": False, "error": str(e)}
     

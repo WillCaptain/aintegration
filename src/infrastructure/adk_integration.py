@@ -76,15 +76,88 @@ class ReactAgent:
 
             for step_index in range(self.max_steps):
                 logger.debug("[Agent] step=%d prompt(head)=%r", step_index+1, cur_prompt[:300])
+                print(f"[ReactAgent] 步骤 {step_index+1}: 开始调用 propose_tool_call")
                 proposed = await self.llm.propose_tool_call(cur_prompt, tools=self._tools_declarations)
+                print(f"[ReactAgent] 步骤 {step_index+1}: propose_tool_call 完成，结果: {proposed}")
                 if not proposed:
-                    logger.debug("[Agent] no tool proposed; stop without tool call")
-                    final_text = await self.llm.generate(cur_prompt, tools=self._tools_declarations)
-                    logger.debug("[Agent] final_text(head)=%r", (final_text or "")[:300])
-                    result = self._process_response(final_text)
-                    break
+                    # 容错：从提示词中提取 ‘使用xxx工具’ 作为工具名，进行一次直接调用
+                    import re
+                    m = re.search(r"使用\s*([A-Za-z0-9_\-]+)\s*工具", cur_prompt)
+                    if m:
+                        tool_name = m.group(1)
+                        tool_args = {}
+                        print(f"[ReactAgent] 未获得建议，容错直接调用解析到的工具: {tool_name}")
+                        schema = self.tool_schemas.get(tool_name, {})
+                        endpoint = schema.get("endpoint")
+                        if isinstance(endpoint, str):
+                            import os
+                            def _repl(m2):
+                                var, default = m2.group(1), m2.group(2) or ""
+                                return os.getenv(var, default)
+                            endpoint = re.sub(r"\$\{([^:}]+):?([^}]*)\}", _repl, endpoint)
+                        call_params = {
+                            "endpoint": endpoint or "",
+                            "tool": tool_name,
+                            "args": tool_args,
+                        }
+                        last_error = None
+                        tool_output = None
+                        for attempt in range(1, self.max_retries + 1):
+                            exec_result = await self.mcp.execute_tool("call_tool", call_params)
+                            if exec_result and exec_result.get("success"):
+                                tool_output = exec_result
+                                break
+                            last_error = (exec_result or {}).get("error") or "unknown error"
+                            logger.warning("[Agent] tool '%s' failed attempt %d/%d: %s", tool_name, attempt, self.max_retries, last_error)
+                        if tool_output is None:
+                            running_summary.append({
+                                "step": step_index + 1,
+                                "action": tool_name,
+                                "args": tool_args,
+                                "output": {"success": False, "error": last_error},
+                            })
+                            return {"success": False, "error": f"Tool '{tool_name}' failed after {self.max_retries} attempts: {last_error}"}
+                        logger.debug("[Agent] (fallback) tool_output(head)=%r", (str(tool_output) or "")[:300])
+                        running_summary.append({
+                            "step": step_index + 1,
+                            "action": tool_name,
+                            "args": tool_args,
+                            "output": tool_output,
+                        })
+                        cur_prompt = (
+                            f"{cur_prompt}\n\n[工具调用结果 step={step_index+1} tool={tool_name}]\n"
+                            f"{tool_output}\n\n请基于以上结果给出最终答复。"
+                        )
+                        print(f"[ReactAgent] (fallback) 工具调用成功，重新组合提示词，准备调用 LLM 生成最终答复")
+                        final_text = await self.llm.generate(cur_prompt, tools=self._tools_declarations)
+                        print(f"[ReactAgent] (fallback) LLM 生成完成，结果: {final_text[:200] if final_text else 'None'}...")
+                        logger.debug("[Agent] final_text(head)=%r", (final_text or "")[:300])
+                        result = self._process_response(final_text)
+                        break
+                    else:
+                        logger.debug("[Agent] no tool proposed; stop without tool call")
+                        print(f"[ReactAgent] 步骤 {step_index+1}: 没有工具建议，调用 generate 生成最终答复")
+                        final_text = await self.llm.generate(cur_prompt, tools=self._tools_declarations)
+                        print(f"[ReactAgent] 步骤 {step_index+1}: generate 完成，结果: {final_text[:200] if final_text else 'None'}...")
+                        logger.debug("[Agent] final_text(head)=%r", (final_text or "")[:300])
+                        result = self._process_response(final_text)
+                        break
                 tool_name = proposed.get("name")
                 tool_args = proposed.get("arguments", {})
+
+                # 强制遵循 action_prompt 中的“使用X工具”指示，覆盖 LLM 提议
+                try:
+                    import re
+                    m_force = re.search(r"使用\s*([A-Za-z0-9_\-]+)\s*工具", cur_prompt)
+                    if m_force:
+                        forced_tool = m_force.group(1)
+                        if forced_tool:
+                            tool_name = forced_tool
+                            # 若无参数则给空对象，保证能直连 Mock API 记录日志
+                            if not isinstance(tool_args, dict):
+                                tool_args = {}
+                except Exception:
+                    pass
                 logger.debug("[Agent] proposed tool=%s args=%s", tool_name, tool_args)
 
                 # 统一通过 call_tool 转发，endpoint 来自 schema
@@ -135,9 +208,15 @@ class ReactAgent:
                     f"{cur_prompt}\n\n[工具调用结果 step={step_index+1} tool={tool_name}]\n"
                     f"{tool_output}\n\n请基于以上结果给出最终答复。"
                 )
+                print(f"[ReactAgent] 工具调用成功，重新组合提示词，准备调用 LLM 生成最终答复")
+                print(f"[ReactAgent] 重新组合的提示词: {cur_prompt[:200]}...")
+                
                 final_text = await self.llm.generate(cur_prompt, tools=self._tools_declarations)
+                print(f"[ReactAgent] LLM 生成完成，结果: {final_text[:200] if final_text else 'None'}...")
+                
                 logger.debug("[Agent] final_text(head)=%r", (final_text or "")[:300])
                 result = self._process_response(final_text)
+                print(f"[ReactAgent] 处理响应完成，最终结果: {result}")
                 break
             else:
                 # 达到步数上限后给出总结

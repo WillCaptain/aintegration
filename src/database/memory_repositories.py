@@ -423,25 +423,47 @@ class MemoryListenerRepository:
             raise
     
     async def get_by_trigger_task(self, task_id: str) -> List[Listener]:
-        """获取监听特定任务的侦听器"""
+        """获取监听特定任务的侦听器（支持 trigger_task_id 为列表或逗号分隔）"""
         try:
-            return [listener for listener in self.listeners.values() 
-                   if listener.trigger_task_id == task_id]
+            results: List[Listener] = []
+            for listener in self.listeners.values():
+                trig = listener.trigger_task_id
+                ids: List[str] = []
+                if isinstance(trig, list):
+                    ids = [str(x).strip() for x in trig]
+                elif isinstance(trig, str):
+                    if "," in trig:
+                        ids = [x.strip() for x in trig.split(",")]
+                    else:
+                        ids = [trig.strip()]
+                else:
+                    ids = [str(trig).strip()]
+                if task_id in ids:
+                    results.append(listener)
+            return results
         except Exception as e:
             logger.error(f"Memory: Failed to get listeners for trigger task {task_id}: {e}")
             raise
     
     async def get_by_trigger(self, task_id: str, status: str) -> List[Listener]:
-        """获取特定触发条件的侦听器"""
+        """获取特定触发条件的侦听器（与 get_by_trigger_task 相同的触发集合过滤）"""
         try:
-            results = []
+            results: List[Listener] = []
             for listener in self.listeners.values():
-                if listener.trigger_task_id == task_id:
-                    # 简化触发条件匹配
-                    trigger_condition = listener.trigger_condition
-                    expected_condition = f"{task_id}.status == {status}"
-                    if expected_condition in trigger_condition or "Any" in trigger_condition:
-                        results.append(listener)
+                trig = listener.trigger_task_id
+                ids: List[str] = []
+                if isinstance(trig, list):
+                    ids = [str(x).strip() for x in trig]
+                elif isinstance(trig, str):
+                    if "," in trig:
+                        ids = [x.strip() for x in trig.split(",")]
+                    else:
+                        ids = [trig.strip()]
+                else:
+                    ids = [str(trig).strip()]
+                if task_id in ids:
+                    # 基础过滤，具体条件由引擎判定
+                    results.append(listener)
             return results
         except Exception as e:
             logger.error(f"Memory: Failed to get listeners for trigger {task_id}/{status}: {e}")

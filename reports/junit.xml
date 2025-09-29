@@ -1,5 +1,26 @@
-<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="1.101" timestamp="2025-09-25T18:54:32.913242" hostname="imacdeMacBook-Air.local"><testcase classname="tests.test_bl012_listener_engine.TestBL012ListenerEngine" name="test_listener_priority_execution" time="1.005"><failure message="AssertionError: assert 'NotStarted' == 'Running'&#10;  - Running&#10;  + NotStarted">tests/test_bl012_listener_engine.py:526: in test_listener_priority_execution
-    assert task_b.status == "Running"  # 高优先级侦听器触发
-E   AssertionError: assert 'NotStarted' == 'Running'
-E     - Running
-E     + NotStarted</failure></testcase></testsuite></testsuites>
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="3" time="38.753" timestamp="2025-09-29T20:10:22.529574" hostname="imacdeMacBook-Air.local"><testcase classname="tests.test_bl005_plan_execution_onboarding.TestBL005PlanExecutionOnboarding" name="test_will_zhang_onboarding_complete_flow" time="38.587" /><testcase classname="tests.test_bl005_plan_execution_onboarding.TestBL005PlanExecutionOnboarding" name="test_onboarding_plan_creation_and_validation" time="0.001" /><testcase classname="tests.test_bl005_plan_execution_onboarding.TestBL005PlanExecutionOnboarding" name="test_listener_chain_execution_sequence" time="0.020"><failure message="SystemExit: 1">venv/lib/python3.13/site-packages/uvicorn/server.py:164: in startup
+    server = await loop.create_server(
+/opt/homebrew/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/base_events.py:1630: in create_server
+    raise OSError(err.errno, msg) from None
+E   OSError: [Errno 48] error while attempting to bind on address ('127.0.0.1', 8009): [errno 48] address already in use
+
+During handling of the above exception, another exception occurred:
+venv/lib/python3.13/site-packages/pytest_asyncio/plugin.py:532: in inner
+    _loop.run_until_complete(task)
+/opt/homebrew/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/base_events.py:712: in run_until_complete
+    self.run_forever()
+/opt/homebrew/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/base_events.py:683: in run_forever
+    self._run_once()
+/opt/homebrew/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/base_events.py:2050: in _run_once
+    handle._run()
+/opt/homebrew/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/lib/python3.13/asyncio/events.py:89: in _run
+    self._context.run(self._callback, *self._args)
+tests/utils/mock_api.py:42: in run_mock_api
+    await server.serve()
+venv/lib/python3.13/site-packages/uvicorn/server.py:71: in serve
+    await self._serve(sockets)
+venv/lib/python3.13/site-packages/uvicorn/server.py:86: in _serve
+    await self.startup(sockets=sockets)
+venv/lib/python3.13/site-packages/uvicorn/server.py:174: in startup
+    sys.exit(1)
+E   SystemExit: 1</failure></testcase></testsuite></testsuites>
