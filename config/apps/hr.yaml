@@ -14,5 +14,16 @@ tools:
         department:
           type: string
       required: [id, name, department]
+  - name: query_profile
+    description: 查询员工档案信息
+    endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
+    parameters:
+      type: object
+      properties:
+        employee_id:
+          type: string
+        employee_name:
+          type: string
+      required: [employee_id, employee_name]
 
 

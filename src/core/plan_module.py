@@ -17,6 +17,8 @@ from ..core.listener_engine import ListenerEngine
 from ..core.task_driver import TaskDriver
 from ..infrastructure.llm_client import build_llm_client
 from ..infrastructure.adk_integration import AgentRuntime
+from ..infrastructure.a2a_client import A2AClient, DefaultA2AClient
+from ..agents.planner_agent import PlannerAgent
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +218,8 @@ class PlanModule:
         plan_repo: MemoryPlanRepository, 
         task_repo: MemoryTaskRepository, 
         listener_repo: MemoryListenerRepository,
-        adk_integration: Optional[AgentRuntime] = None
+        adk_integration: Optional[AgentRuntime] = None,
+        a2a_client: Optional[A2AClient] = None
     ):
         self.plan_manager = PlanManager(plan_repo)
         self.task_manager = TaskManager(task_repo)
@@ -231,6 +234,28 @@ class PlanModule:
         
         # 初始化 LLM 客户端
         self.llm_client = build_llm_client()
+
+        # 初始化 A2A 与 PlannerAgent（默认使用内置A2A实现，可替换为官方实现）
+        self.a2a_client = a2a_client or DefaultA2AClient()
+        self.planner_agent = PlannerAgent(self.a2a_client, self.llm_client)
+
+        # 将Planner回调注册到侦听引擎
+        self.listener_engine.set_planner_callback(
+            lambda plan_id, task_id, old_status, new_status, plan_ctx: self.planner_agent.on_task_status_change(
+                self, plan_id, task_id, old_status, new_status, plan_ctx
+            )
+        )
+
+    # 便捷设置：允许在运行时注入/替换 A2A 客户端（例如测试中绑定实际的 A2AServer）
+    def set_a2a_client(self, a2a_client: A2AClient):
+        self.a2a_client = a2a_client
+        self.planner_agent = PlannerAgent(self.a2a_client)
+        # 重新注册回调以使用新的实例
+        self.listener_engine.set_planner_callback(
+            lambda plan_id, task_id, old_status, new_status, plan_ctx: self.planner_agent.on_task_status_change(
+                self, plan_id, task_id, old_status, new_status, plan_ctx
+            )
+        )
         
         # 注册孤立状态变化的处理
         self._register_orphaned_change_handler()

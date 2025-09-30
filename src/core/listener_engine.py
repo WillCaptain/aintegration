@@ -35,6 +35,12 @@ class ListenerEngine:
         self.execution_queue = asyncio.Queue()
         self.is_running = False
         self._execution_task = None
+        # 可选的Planner回调：用于处理孤立/错误/收敛等事件
+        self._planner_callback: Optional[Callable[[str, str, str, str, Dict[str, Any]], Any]] = None
+
+    def set_planner_callback(self, callback: Callable[[str, str, str, str, Dict[str, Any]], Any]):
+        """注册Planner回调。签名: (plan_id, task_id, old_status, new_status, plan_context)"""
+        self._planner_callback = callback
     
     async def start(self):
         """启动侦听引擎"""
@@ -108,11 +114,33 @@ class ListenerEngine:
         # 查找触发的侦听器
         triggered_listeners = await self._find_triggered_listeners(task_id, new_status, plan_context)
         
+        # 当无侦听器命中、任务进入错误状态、或主任务完成时，触发Planner
+        is_main_task = False
+        try:
+            is_main_task = plan_context.get("main_task_id") == task_id
+        except Exception:
+            is_main_task = False
+
+        should_notify_planner = False
+        reasons: List[str] = []
         if not triggered_listeners:
-            logger.warning(f"No listeners triggered for task {task_id} status change to {new_status}")
-            # 这是一个异常状态变化，需要Planner处理
-            await self._handle_orphaned_status_change(task_id, new_status, plan_id, plan_context)
-            return
+            reasons.append("no_listeners")
+            should_notify_planner = True
+        if str(new_status) == TaskStatus.ERROR.value:
+            reasons.append("task_error")
+            should_notify_planner = True
+        if is_main_task and str(new_status) == TaskStatus.DONE.value:
+            reasons.append("main_done")
+            should_notify_planner = True
+
+        if should_notify_planner:
+            if not triggered_listeners:
+                logger.warning(f"No listeners triggered for task {task_id} status change to {new_status}")
+            logger.info(f"Notify planner due to: {','.join(reasons)}")
+            await self._notify_planner(task_id, old_status, new_status, plan_id, plan_context)
+            if not triggered_listeners:
+                # 无侦听器情况下直接返回，避免后续空执行
+                return
         
         # 按优先级排序侦听器
         triggered_listeners.sort(key=lambda l: l.priority)
@@ -264,9 +292,22 @@ class ListenerEngine:
     
     async def _notify_planner_for_orphaned_change(self, task_id: str, status: str, plan_id: str, plan_context: Dict[str, Any]):
         """通知Planner处理孤立的状态变化"""
-        # 这里应该调用Planner的接口
-        # 暂时记录日志
-        logger.info(f"Notifying planner for orphaned change: task {task_id} -> {status} in plan {plan_id}")
+        # 兼容旧方法：委托到统一通知入口
+        await self._notify_planner(task_id, plan_context.get("tasks", {}).get(task_id, {}).get("status"), status, plan_id, plan_context)
+
+    async def _notify_planner(self, task_id: str, old_status: Optional[str], new_status: str, plan_id: str, plan_context: Dict[str, Any]):
+        """统一通知Planner入口"""
+        try:
+            if self._planner_callback is None:
+                logger.info(f"Planner callback not registered. Skip planner notification for {task_id} -> {new_status}")
+                return
+            logger.info(f"Calling planner callback for task {task_id}: {old_status} -> {new_status}")
+            cb = self._planner_callback
+            maybe_awaitable = cb(plan_id, task_id, old_status, new_status, plan_context)
+            if asyncio.iscoroutine(maybe_awaitable):
+                await maybe_awaitable
+        except Exception as e:
+            logger.error(f"Error notifying planner: {e}")
     
     async def _get_plan_context(self, plan_id: str) -> Dict[str, Any]:
         """获取计划上下文"""
@@ -284,6 +325,7 @@ class ListenerEngine:
                 "plan_id": plan_id,
                 "plan_name": plan.name,
                 "plan_status": plan.status,
+                "main_task_id": plan.main_task_id,
                 "tasks": {}
             }
             

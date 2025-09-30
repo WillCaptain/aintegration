@@ -1,60 +1,8 @@
-{"timestamp": "2025-09-29T21:00:01.289500", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:02.407728", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:03.521278", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:04.636388", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:05.752143", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:06.867393", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:07.986240", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:09.100223", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:10.235493", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:11.327565", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:12.443459", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:13.559424", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:14.676175", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:15.793924", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:16.911203", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:18.029252", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:19.143863", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:20.259931", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:21.374644", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:22.492443", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:23.607000", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:24.726116", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:25.838854", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:26.978749", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:28.095828", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:29.215482", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:30.332815", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:31.449356", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:32.565997", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:33.680575", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:34.798492", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:35.915507", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:37.031509", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:38.149506", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:39.267744", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:40.380662", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:41.498842", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:42.615734", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:43.725570", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:44.876145", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:45.950361", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:47.066876", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:48.187678", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:49.302258", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:50.418686", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:51.534051", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:52.652471", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:53.766232", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:54.883951", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:55.999918", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:57.119018", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:58.235467", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:00:59.351774", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:01:00.468003", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:01:01.613036", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:01:02.705287", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:01:03.822687", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:01:04.938049", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:01:06.053685", "tool": "probe", "args": {}, "source": "mock_api"}
-{"timestamp": "2025-09-29T21:01:08.544893", "tool": "send_email", "args": {"to": "a@b.com", "subject": "hi", "body": "hello"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:09:44.964487", "tool": "create_employee_profile", "args": {"id": "001.context.id", "name": "001.context.name", "department": "001.context.department"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:09:49.880803", "tool": "apply_computer", "args": {"emp_id": "002", "level": "高级"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:09:50.111716", "tool": "grant_access", "args": {"emp_id": "001.context.id", "name": "001.context.name"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:09:57.862446", "tool": "outbound", "args": {"pc_model": "{003.context.pc_model}"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:10:12.636302", "tool": "send_email", "args": {"to": "002.context.email", "subject": "新员工欢迎邮件", "body": "亲爱的002.context.name，\n\n欢迎加入我们的团队！我们很高兴您成为我们{002.context.department}部门的一员。\n\n希望您在这里工作愉快，并期待与您共同成长。\n\n祝好！\n\n公司团队"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:10:17.033793", "tool": "query_profile", "args": {"employee_id": "WZ001", "employee_name": "Will Zhang"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:10:17.034420", "tool": "check_outbound_status", "args": {"employee_id": "WZ001", "employee_name": "Will Zhang"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:10:17.034810", "tool": "query_access", "args": {"employee_id": "WZ001", "employee_name": "Will Zhang"}, "source": "mock_api"}

@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 class ReactAgent:
     """ReAct智能体实现"""
     
-    def __init__(self,
-                 system_prompt: str,
+    def __init__(self, 
+                 system_prompt: str, 
                  tools: Optional[List[str]] = None,
                  tool_registry: Optional[Dict[str, Callable[..., Any]]] = None,
                  tool_schemas: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -332,7 +332,7 @@ class AgentRuntime:
                 tool_registry=config.get("tool_registry", {}),
                 tool_schemas=config.get("tool_schemas", {}),
             )
-
+            
             agent_id = config.get("agent_id", f"agent_{len(self.agents)}")
             self.agents[agent_id] = agent
             

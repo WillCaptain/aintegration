@@ -35,6 +35,10 @@ AIntegration 是一个基于 AI 的智能集成平台，通过 Agent 和 Plan �
   - 支持上下文变量注入
   - 支持执行参数验证
   - 支持plan执行后的Trace查询，用于溯源
+  - [增强] 主任务完成或无侦听器/错误场景触发 Planner：
+    - 通过 A2A 查询 HR/Inventory/Access 系统状态（profile/outbound/access）
+    - 若缺失则动态创建任务与侦听器（基于配置化 BizAgent）
+    - 收敛条件满足后触发 send_email（侦听 004/005 Done）
 
 - **BL-006**: AgentPlanner 智能选择
   - 实现意图识别算法
@@ -59,6 +63,7 @@ AIntegration 是一个基于 AI 的智能集成平台，通过 Agent 和 Plan �
   - 支持 Agent 自动注册
   - 支持 Agent 能力描述
   - 支持 Agent 健康检查
+  - [新增] 引入 A2AClient 抽象，默认对接内置 A2AServer，后续可替换官方 A2A 包
 
 - **BL-010**: Agent 执行引擎
   - 支持 Agent 任务调度
@@ -69,9 +74,14 @@ AIntegration 是一个基于 AI 的智能集成平台，通过 Agent 和 Plan �
   - 支持工具动态注册
   - 支持工具参数验证
   - 支持工具执行日志
+  - [合规] BizAgent 全部以配置化方式生成与注册（Agent Card），不落地实体代码
 
 ### 4. 事件驱动系统
 - **BL-012**: 事件总线
+  - [增强] ListenerEngine 支持注册 Planner 回调，覆盖：
+    - 无侦听器命中（orphaned）
+    - 任务 Error
+    - 主任务 Done 收敛
   - 实现事件发布/订阅机制
   - 支持事件路由和过滤
   - 支持事件持久化

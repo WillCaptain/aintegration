@@ -112,15 +112,58 @@ class A2AServer:
     
     async def _execute_agent_internal(self, agent: Dict, request: A2ARequest) -> Dict:
         """内部Agent执行逻辑"""
-        # 这里需要实现具体的Agent执行逻辑
-        # 简化实现，返回模拟结果
-        return {
-            "agent_id": agent["agent_id"],
-            "action": request.action,
-            "parameters": request.parameters,
-            "execution_time": datetime.now().isoformat(),
-            "result": "success"
-        }
+        try:
+            # 根据能力调用相应的工具
+            capability = request.action
+            parameters = request.parameters
+            
+            # 调用 Mock API 进行实际验证
+            import httpx
+            import os
+            
+            mock_api_url = os.getenv("MOCK_API_URL", "http://127.0.0.1:8009")
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{mock_api_url}/tool",
+                    json={
+                        "tool": capability,
+                        "args": parameters
+                    },
+                    timeout=10.0
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    return {
+                        "agent_id": agent["agent_id"],
+                        "action": request.action,
+                        "parameters": request.parameters,
+                        "execution_time": datetime.now().isoformat(),
+                        "success": result.get("success", True),
+                        "data": result.get("data", {}),
+                        "message": result.get("message", "success")
+                    }
+                else:
+                    return {
+                        "agent_id": agent["agent_id"],
+                        "action": request.action,
+                        "parameters": request.parameters,
+                        "execution_time": datetime.now().isoformat(),
+                        "success": False,
+                        "error": f"Mock API returned status {response.status_code}"
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Error executing agent {agent['agent_id']}: {e}")
+            return {
+                "agent_id": agent["agent_id"],
+                "action": request.action,
+                "parameters": request.parameters,
+                "execution_time": datetime.now().isoformat(),
+                "success": False,
+                "error": str(e)
+            }
     
     async def start(self):
         """启动A2A Server"""

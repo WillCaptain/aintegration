@@ -32,7 +32,49 @@ async def handle_tool_call(request: Request):
     with open(MOCK_LOG_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
 
-    return {"success": True, "message": f"Mock tool '{tool_name}' executed and logged."}
+    # 根据工具名称返回不同的模拟结果
+    if tool_name == "query_profile":
+        # 模拟查询员工档案状态
+        employee_id = args.get("employee_id", "unknown")
+        return {
+            "success": True, 
+            "data": {
+                "verified": True,  # 假设档案已创建
+                "employee_id": employee_id,
+                "profile_exists": True,
+                "profile_complete": True
+            },
+            "message": f"Profile verification for {employee_id}"
+        }
+    elif tool_name == "check_outbound_status":
+        # 模拟查询电脑出库状态
+        employee_id = args.get("employee_id", "unknown")
+        return {
+            "success": True,
+            "data": {
+                "verified": True,  # 假设电脑已出库
+                "employee_id": employee_id,
+                "outbound_completed": True,
+                "computer_serial": "PC-001"
+            },
+            "message": f"Outbound verification for {employee_id}"
+        }
+    elif tool_name == "query_access":
+        # 模拟查询门禁状态
+        employee_id = args.get("employee_id", "unknown")
+        return {
+            "success": True,
+            "data": {
+                "verified": True,  # 假设门禁已开通
+                "employee_id": employee_id,
+                "access_granted": True,
+                "access_level": "employee"
+            },
+            "message": f"Access verification for {employee_id}"
+        }
+    else:
+        # 其他工具调用
+        return {"success": True, "message": f"Mock tool '{tool_name}' executed and logged."}
 
 async def run_mock_api(host: str = "127.0.0.1", port: int = 8009):
     """运行 Mock API 服务器"""
