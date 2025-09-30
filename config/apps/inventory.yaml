@@ -11,13 +11,20 @@ tools:
           type: string
       required: [pc_model]
   - name: check_outbound_status
-    description: 查询出库单领取状态
+    description: 查询出库状态（支持按出库单ID或员工信息查询）
     endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
     parameters:
       type: object
       properties:
         outbound_id:
           type: string
-      required: [outbound_id]
-
-
+          description: 出库单ID（可选）
+        employee_id:
+          type: string
+          description: 员工ID（可选）
+        employee_name:
+          type: string
+          description: 员工姓名（可选）
+      anyOf:
+        - required: [outbound_id]
+        - required: [employee_id, employee_name]

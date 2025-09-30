@@ -12,5 +12,16 @@ tools:
         name:
           type: string
       required: [emp_id, name]
+  - name: query_access
+    description: 查询员工门禁权限状态
+    endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
+    parameters:
+      type: object
+      properties:
+        employee_id:
+          type: string
+        employee_name:
+          type: string
+      required: [employee_id, employee_name]
 
 

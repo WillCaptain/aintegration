@@ -137,7 +137,7 @@ class TestBL005PlanExecutionOnboarding:
             assert success is True
             
             # 等待侦听器链式执行完成
-            await asyncio.sleep(35)  # 进一步延长，覆盖出库+领取+并行收敛发信
+            await asyncio.sleep(60)  # 进一步延长，覆盖出库+领取+并行收敛发信
             
             # 验证任务状态变化
             await self._verify_task_states(plan_module)

@@ -19,6 +19,7 @@ from ..infrastructure.llm_client import build_llm_client
 from ..infrastructure.adk_integration import AgentRuntime
 from ..infrastructure.a2a_client import A2AClient, DefaultA2AClient
 from ..agents.planner_agent import PlannerAgent
+from .agent_config_loader import agent_config_loader
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +220,8 @@ class PlanModule:
         task_repo: MemoryTaskRepository, 
         listener_repo: MemoryListenerRepository,
         adk_integration: Optional[AgentRuntime] = None,
-        a2a_client: Optional[A2AClient] = None
+        a2a_client: Optional[A2AClient] = None,
+        auto_register_agents: bool = True
     ):
         self.plan_manager = PlanManager(plan_repo)
         self.task_manager = TaskManager(task_repo)
@@ -231,6 +233,11 @@ class PlanModule:
         # 初始化任务驱动器和侦听引擎
         self.task_driver = TaskDriver(adk_integration=adk_integration)
         self.listener_engine = ListenerEngine(task_repo, listener_repo, plan_repo, self.task_driver)
+        
+        # A2A 客户端和 Planner Agent
+        self.a2a_client = a2a_client
+        self.planner_agent = None
+        self.auto_register_agents = auto_register_agents
         
         # 初始化 LLM 客户端
         self.llm_client = build_llm_client()
@@ -265,9 +272,48 @@ class PlanModule:
         # 这里可以注册回调函数，当发生孤立状态变化时调用
         pass
     
+    async def _auto_register_agents(self):
+        """自动注册所有 BizAgent 到 A2A Server"""
+        try:
+            logger.info("Starting auto-registration of agents...")
+            
+            # 加载所有 Agent 配置
+            agent_configs = agent_config_loader.load_all_agents()
+            logger.info(f"Loaded {len(agent_configs)} agent configurations: {list(agent_configs.keys())}")
+            
+            if not agent_configs:
+                logger.warning("No agent configurations found")
+                return
+            
+            # 获取所有 Agent 卡片
+            agent_cards = agent_config_loader.get_all_agent_cards()
+            logger.info(f"Generated {len(agent_cards)} agent cards")
+            
+            # 批量注册到 A2A Server
+            if hasattr(self.a2a_client, 'a2a_server') and self.a2a_client.a2a_server:
+                registered_count = await self.a2a_client.a2a_server.register_agents_batch(agent_cards)
+                logger.info(f"Auto-registered {registered_count} agents to A2A Server")
+            else:
+                logger.warning("A2A Server not available for auto-registration")
+                
+        except Exception as e:
+            logger.error(f"Failed to auto-register agents: {e}")
+            raise
+    
     async def start(self):
         """启动计划模块"""
         try:
+            # 自动注册 Agent（如果启用）
+            if self.auto_register_agents and self.a2a_client:
+                await self._auto_register_agents()
+            
+            # 初始化 Planner Agent
+            if self.a2a_client:
+                self.planner_agent = PlannerAgent(self.a2a_client, self.llm_client)
+                # 注册 Planner 回调
+                self.listener_engine.set_planner_callback(self.planner_agent.on_task_status_change)
+                logger.info("Planner Agent initialized and registered")
+            
             # 启动侦听引擎
             await self.listener_engine.start()
             logger.info("Plan Module started")

@@ -187,6 +187,19 @@ class A2AServer:
         self.registered_agents[agent.agent_id] = agent.dict()
         logger.info(f"Registered agent: {agent.agent_id}")
     
+    async def register_agents_batch(self, agent_cards: List[Dict]):
+        """批量注册Agent"""
+        registered_count = 0
+        for agent_card in agent_cards:
+            try:
+                await self.register_agent(agent_card)
+                registered_count += 1
+            except Exception as e:
+                logger.error(f"Failed to register agent {agent_card.get('agent_id', 'unknown')}: {e}")
+        
+        logger.info(f"Batch registered {registered_count}/{len(agent_cards)} agents")
+        return registered_count
+    
     async def discover_agents(self) -> List[Dict]:
         """发现可用Agent"""
         return list(self.registered_agents.values())

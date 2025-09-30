@@ -1,8 +1,8 @@
-{"timestamp": "2025-09-30T09:09:44.964487", "tool": "create_employee_profile", "args": {"id": "001.context.id", "name": "001.context.name", "department": "001.context.department"}, "source": "mock_api"}
-{"timestamp": "2025-09-30T09:09:49.880803", "tool": "apply_computer", "args": {"emp_id": "002", "level": "高级"}, "source": "mock_api"}
-{"timestamp": "2025-09-30T09:09:50.111716", "tool": "grant_access", "args": {"emp_id": "001.context.id", "name": "001.context.name"}, "source": "mock_api"}
-{"timestamp": "2025-09-30T09:09:57.862446", "tool": "outbound", "args": {"pc_model": "{003.context.pc_model}"}, "source": "mock_api"}
-{"timestamp": "2025-09-30T09:10:12.636302", "tool": "send_email", "args": {"to": "002.context.email", "subject": "新员工欢迎邮件", "body": "亲爱的002.context.name，\n\n欢迎加入我们的团队！我们很高兴您成为我们{002.context.department}部门的一员。\n\n希望您在这里工作愉快，并期待与您共同成长。\n\n祝好！\n\n公司团队"}, "source": "mock_api"}
-{"timestamp": "2025-09-30T09:10:17.033793", "tool": "query_profile", "args": {"employee_id": "WZ001", "employee_name": "Will Zhang"}, "source": "mock_api"}
-{"timestamp": "2025-09-30T09:10:17.034420", "tool": "check_outbound_status", "args": {"employee_id": "WZ001", "employee_name": "Will Zhang"}, "source": "mock_api"}
-{"timestamp": "2025-09-30T09:10:17.034810", "tool": "query_access", "args": {"employee_id": "WZ001", "employee_name": "Will Zhang"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:30:17.964680", "tool": "create_employee_profile", "args": {"id": "{001.context.id}", "name": "{001.context.name}", "department": "{001.context.department}"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:30:29.793154", "tool": "apply_computer", "args": {"emp_id": "002", "level": "context.level"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:30:33.219074", "tool": "grant_access", "args": {"emp_id": "{001.context.id}", "name": "{001.context.name}"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:30:52.263126", "tool": "outbound", "args": {}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:31:04.246447", "tool": "send_email", "args": {"to": "002.context.email", "subject": "新员工欢迎邮件", "body": "亲爱的002.context.name，欢迎加入我们的团队！我们很高兴您能成为我们部门的一员。我们期待与您一起工作，共同创造美好的未来。如果您有任何问题或需要帮助，请随时与我们联系。再次欢迎您！"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:31:09.298432", "tool": "query_profile", "args": {"employee_id": "WZ001", "employee_name": "Will Zhang"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:31:09.298958", "tool": "check_outbound_status", "args": {"employee_id": "WZ001", "employee_name": "Will Zhang"}, "source": "mock_api"}
+{"timestamp": "2025-09-30T09:31:09.299282", "tool": "query_access", "args": {"employee_id": "WZ001", "employee_name": "Will Zhang"}, "source": "mock_api"}
