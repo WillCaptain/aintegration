@@ -38,7 +38,7 @@ class MemoryPlanRepository:
                 plan.created_at = datetime.now()
             self.plans[plan_id] = plan
             # 初始化版本历史（保存创建时的快照）
-            self.plan_versions[plan_id] = [copy.deepcopy(plan.config)]
+            self.plan_versions[plan_id] = [copy.deepcopy(plan.to_dict())]
             
             logger.info(f"Memory: Created plan {plan_id}")
             return plan_id
@@ -63,7 +63,7 @@ class MemoryPlanRepository:
                 if expected_version is not None:
                     current_version = None
                     try:
-                        current_version = plan.config.get("metadata", {}).get("version")
+                        current_version = plan.metadata.get("version") if hasattr(plan, 'metadata') and plan.metadata else None
                     except Exception:
                         current_version = None
                     if current_version != expected_version:
@@ -78,14 +78,17 @@ class MemoryPlanRepository:
                             dst[k] = v
 
                 for key, value in updates.items():
-                    if key == "config" and isinstance(value, dict):
-                        deep_merge(plan.config, value)
+                    if key == "metadata" and isinstance(value, dict) and hasattr(plan, 'metadata'):
+                        # 更新 metadata 字段
+                        if not hasattr(plan, 'metadata') or plan.metadata is None:
+                            plan.metadata = {}
+                        deep_merge(plan.metadata, value)
                     elif hasattr(plan, key):
                         setattr(plan, key, value)
                 plan.updated_at = datetime.now()
-                # 追加最新版本快照
+                # 追加最新版本快照（保存整个 Plan 对象的字典表示）
                 self.plan_versions.setdefault(plan_id, [])
-                self.plan_versions[plan_id].append(copy.deepcopy(plan.config))
+                self.plan_versions[plan_id].append(copy.deepcopy(plan.to_dict()))
                 logger.info(f"Memory: Updated plan {plan_id}")
         except Exception as e:
             logger.error(f"Memory: Failed to update plan {plan_id}: {e}")
@@ -358,8 +361,18 @@ class MemoryTaskRepository:
         try:
             if task_id in self.tasks:
                 task = self.tasks[task_id]
+                # 合并上下文，保留既有键（如 retry_info），仅更新 values 子项
+                existing_ctx = task.context if isinstance(task.context, dict) else {}
+                values_ctx = existing_ctx.get("values", {})
+                # 传入的 context 视为 values 的增量更新
+                if isinstance(context, dict):
+                    values_ctx.update(context)
+                existing_ctx["values"] = values_ctx
+                # 同步记录当前状态（保持兼容，很多测试依赖 context.status）
+                existing_ctx["status"] = status
+
                 task.status = status
-                task.context = {"status": status, "values": context}
+                task.context = existing_ctx
                 task.updated_at = datetime.now()
                 logger.info(f"Memory: Updated task {task_id} status to {status}")
         except Exception as e:

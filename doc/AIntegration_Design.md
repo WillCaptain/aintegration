@@ -31,9 +31,33 @@ AIntegration是一个基于AI Agent的企业集成代理框架，通过将传统
   - **SelfPlan Mode**：通过提示词自动生成计划
   - **ResiliencePlan**：失败时自动重新规划
 
-## 2. 系统架构
+## 2. 系统设计约定
 
-### 2.1 整体架构
+### 2.1 Plan设计约定
+
+#### 2.1.1 主任务ID约定
+- **约定**：每个Plan的主任务ID固定为 `"001"`
+- **目的**：
+  - 简化配置，无需在多处指定主任务ID
+  - 为默认错误处理提供统一目标
+  - 便于Planner快速定位主任务
+- **应用场景**：
+  - TaskDriver失败且无failure_output时，自动设置任务001为Error
+  - Planner验证时默认查询任务001的状态
+  - 计划完成判断以任务001的Done状态为准
+
+#### 2.1.2 错误处理默认行为
+- **约定**：Listener执行失败且未配置failure_output时，默认设置主任务（001）为Error
+- **目的**：触发PlannerAgent的重试机制
+- **Planner重试逻辑**：
+  - 主任务Error → Planner从plan_run_logs找到导致Error的Listener
+  - 重置主任务为NotStarted → 重新执行失败的Listener
+  - 重试次数限制：max_retry_count（默认3次，可配置）
+  - 超过限制 → 标记计划为"waiting_for_resume"状态
+
+## 3. 系统架构
+
+### 3.1 整体架构
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   HR系统         │    │   Finance系统    │    │   IT系统         │

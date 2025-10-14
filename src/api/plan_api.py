@@ -254,3 +254,38 @@ async def delete_plan(
     except Exception as e:
         logger.error(f"Error deleting plan: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{plan_id}/resume")
+async def resume_plan(
+    plan_id: str,
+    plan_manager = Depends(get_plan_manager)
+):
+    """恢复错误状态的计划（微动态规划）"""
+    try:
+        logger.info(f"Resuming plan: {plan_id}")
+        
+        if not plan_manager:
+            raise HTTPException(status_code=500, detail="Plan manager not available")
+        
+        # 检查计划是否存在
+        plan = await plan_manager.get_plan(plan_id)
+        
+        if not plan:
+            raise HTTPException(status_code=404, detail="Plan not found")
+        
+        # 通过 PlanModule 的 planner_agent 恢复计划
+        if not hasattr(plan_manager, 'planner_agent') or not plan_manager.planner_agent:
+            raise HTTPException(status_code=500, detail="Planner agent not available")
+        
+        success = await plan_manager.planner_agent.resume_plan(plan_manager, plan_id)
+        
+        if success:
+            return {"message": "Plan resumed successfully", "plan_id": plan_id}
+        else:
+            raise HTTPException(status_code=400, detail="No error tasks found to resume")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resuming plan: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

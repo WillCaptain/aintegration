@@ -77,10 +77,28 @@ class ReactAgent:
             for step_index in range(self.max_steps):
                 logger.debug("[Agent] step=%d prompt(head)=%r", step_index+1, cur_prompt[:300])
                 print(f"[ReactAgent] 步骤 {step_index+1}: 开始调用 propose_tool_call")
+                print(f"[ReactAgent] 步骤 {step_index+1}: LLM调用前，prompt长度={len(cur_prompt)}")
                 proposed = await self.llm.propose_tool_call(cur_prompt, tools=self._tools_declarations)
-                print(f"[ReactAgent] 步骤 {step_index+1}: propose_tool_call 完成，结果: {proposed}")
+                print(f"[ReactAgent] 步骤 {step_index+1}: LLM已调用，propose_tool_call 完成，结果: {proposed}")
                 if not proposed:
-                    # 容错：从提示词中提取 ‘使用xxx工具’ 作为工具名，进行一次直接调用
+                    print(f"[ReactAgent] 步骤 {step_index+1}: LLM返回None，未建议工具调用")
+                    print(f"[ReactAgent] 当前prompt内容: {cur_prompt[:500]}...")
+                    
+                    # 保存完整prompt到文件用于调试
+                    import os
+                    from datetime import datetime
+                    debug_dir = "tests/.artifacts"
+                    os.makedirs(debug_dir, exist_ok=True)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    prompt_file = f"{debug_dir}/llm_none_prompt_{timestamp}.txt"
+                    with open(prompt_file, 'w', encoding='utf-8') as f:
+                        f.write(f"=== LLM返回None时的完整Prompt ===\n")
+                        f.write(f"时间: {datetime.now().isoformat()}\n")
+                        f.write(f"步骤: {step_index+1}\n\n")
+                        f.write(cur_prompt)
+                    print(f"[ReactAgent] 完整prompt已保存到: {prompt_file}")
+                    
+                    # 容错：从提示词中提取 '使用xxx工具' 作为工具名，进行一次直接调用
                     import re
                     m = re.search(r"使用\s*([A-Za-z0-9_\-]+)\s*工具", cur_prompt)
                     if m:
@@ -179,12 +197,25 @@ class ReactAgent:
                 # 通用重试：仅在失败时重试，成功即收敛
                 last_error: Optional[str] = None
                 tool_output: Any = None
+                print(f"[ReactAgent] 准备循环调用工具 {tool_name}，max_retries={self.max_retries}")
                 for attempt in range(1, self.max_retries + 1):
+                    print(f"[ReactAgent] 工具调用循环 attempt {attempt}/{self.max_retries}")
                     exec_result = await self.mcp.execute_tool("call_tool", call_params)
-                    if exec_result and exec_result.get("success"):
+                    print(f"[ReactAgent] MCP返回结果: {exec_result}")
+                    
+                    # 检查内层result.success（Mock API的真实结果）
+                    inner_result = exec_result.get("output", {}).get("result", {}) if exec_result else {}
+                    inner_success = inner_result.get("success", False) if isinstance(inner_result, dict) else False
+                    print(f"[ReactAgent] 内层result.success={inner_success}")
+                    
+                    if exec_result and inner_success:
                         tool_output = exec_result
+                        print(f"[ReactAgent] 工具调用成功（内层检查），跳出循环")
                         break
-                    last_error = (exec_result or {}).get("error") or "unknown error"
+                    
+                    # 提取错误信息（可能在内层result）
+                    last_error = inner_result.get("error") if isinstance(inner_result, dict) else (exec_result or {}).get("error", "unknown error")
+                    print(f"[ReactAgent] 工具调用失败，error={last_error}")
                     logger.warning("[Agent] tool '%s' failed attempt %d/%d: %s", tool_name, attempt, self.max_retries, last_error)
                 if tool_output is None:
                     # 多次失败后返回错误
@@ -314,14 +345,52 @@ class ReactAgent:
 class AgentRuntime:
     """Agent 执行运行时（代替 ADKIntegration 名称）"""
     
-    def __init__(self, api_key: str):
-        self.api_key = api_key
+    def __init__(self, mcp_client_or_api_key):
+        # 兼容两种初始化方式：mcp_client对象或api_key字符串
+        if isinstance(mcp_client_or_api_key, str):
+            self.api_key = mcp_client_or_api_key
+            self.mcp_client = None
+        else:
+            # 传入的是MCPClient对象
+            self.mcp_client = mcp_client_or_api_key
+            self.api_key = None
+        
         self.agents = {}
         self._initialize_adk()
     
     def _initialize_adk(self):
         """初始化运行时（兼容旧 ADK 接口占位）"""
         logger.info("AgentRuntime initialize (using LLM client abstraction)")
+    
+    def load_agents_from_config(self, config_dir: str = "config/apps"):
+        """从config目录加载所有BizAgent"""
+        from ..core.agent_config_loader import agent_config_loader
+        
+        logger.info(f"Loading agents from {config_dir}")
+        agent_configs = agent_config_loader.load_all_agents()
+        
+        for agent_id, agent_config in agent_configs.items():
+            try:
+                # 创建ReactAgent
+                tools = [tool.get("name") for tool in agent_config.get("tools", []) if tool.get("name")]
+                tool_schemas = {}
+                for tool in agent_config.get("tools", []):
+                    if tool.get("name"):
+                        tool_schemas[tool["name"]] = tool
+                
+                react_agent = self.create_react_agent({
+                    "agent_id": agent_id,
+                    "system_prompt": agent_config.get("system_context", f"你是{agent_id}代理"),
+                    "tools": tools,
+                    "tool_schemas": tool_schemas
+                })
+                
+                logger.info(f"Loaded agent {agent_id} with {len(tools)} tools: {tools}")
+            except Exception as e:
+                logger.error(f"Failed to load agent {agent_id}: {e}")
+        
+        logger.info(f"AgentRuntime loaded {len(self.agents)} agents")
+        return len(self.agents)
     
     def create_react_agent(self, config: Dict) -> ReactAgent:
         """创建ReAct Agent"""
@@ -331,7 +400,12 @@ class AgentRuntime:
                 tools=config["tools"],
                 tool_registry=config.get("tool_registry", {}),
                 tool_schemas=config.get("tool_schemas", {}),
+                app_name=config.get("agent_id")
             )
+            
+            # 如果有mcp_client，设置给agent
+            if self.mcp_client:
+                agent.mcp_client = self.mcp_client
             
             agent_id = config.get("agent_id", f"agent_{len(self.agents)}")
             self.agents[agent_id] = agent
@@ -360,27 +434,15 @@ class AgentRuntime:
         return await agent.execute(context)
 
     async def execute_agent_with_context(self, agent_id: str, action_prompt: str, plan_context: Dict[str, Any]) -> Dict:
-        """携带结构化上下文执行：优先直接通过 MCP 调用第一个工具（用于测试/简单场景）。"""
+        """携带结构化上下文执行：使用ReactAgent的完整执行流程（包含重试逻辑）。"""
+        print(f"[AgentRuntime] execute_agent_with_context 被调用，agent_id={agent_id}")
         agent = self.get_agent(agent_id)
         if not agent:
             raise ValueError(f"Agent {agent_id} not found")
-        # 若存在工具声明，直接调用第一个工具
-        tool_name: Optional[str] = (agent.tools[0] if agent.tools else None)
-        if tool_name and tool_name in agent.tool_schemas:
-            schema = agent.tool_schemas.get(tool_name, {})
-            endpoint = schema.get("endpoint", "")
-            # 取主任务001的上下文值作为参数（示例/约定）
-            args = (
-                (plan_context.get("tasks", {}).get("001", {})
-                 .get("context", {}).get("values", {})) or {}
-            )
-            try:
-                client = MCPClient()
-                res = await client.execute_tool("call_tool", {"endpoint": endpoint, "tool": tool_name, "args": args})
-                return res or {"success": True, "result": {}}
-            except Exception as e:
-                logger.error("execute_agent_with_context MCP error: %s", e)
-                return {"success": False, "error": str(e)}
-        # 否则回退到文本上下文执行
-        full_context = f"{action_prompt}\n\n{plan_context}"
-        return await agent.execute(full_context)
+        
+        # 统一使用ReactAgent的execute方法，确保重试逻辑生效
+        full_context = f"{action_prompt}\n\n上下文信息：{plan_context}"
+        print(f"[AgentRuntime] 调用 agent.execute，context长度={len(full_context)}")
+        result = await agent.execute(full_context)
+        print(f"[AgentRuntime] agent.execute 完成，result keys={list(result.keys()) if isinstance(result, dict) else 'not dict'}")
+        return result

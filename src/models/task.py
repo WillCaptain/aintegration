@@ -17,13 +17,13 @@ class TaskStatus(Enum):
 
 @dataclass
 class Task:
-    """任务模型"""
+    """任务模型（元数据模板）"""
     id: str
     plan_id: str
     name: str
     prompt: str
-    status: str
-    context: Dict[str, Any]
+    # 注意：Task 是元数据模板，没有 status 和 context 属性
+    # 运行时状态存储在 TaskInstance 中
     created_at: datetime
     updated_at: Optional[datetime] = None
     is_main_task: bool = False
@@ -36,7 +36,9 @@ class Task:
     @classmethod
     def from_dict(cls, data: Dict) -> 'Task':
         """从字典创建实例"""
-        return cls(**data)
+        # 过滤掉不存在的字段（向后兼容）
+        filtered_data = {k: v for k, v in data.items() if k in ['id', 'plan_id', 'name', 'prompt', 'created_at', 'updated_at', 'is_main_task', 'parent_task_id']}
+        return cls(**filtered_data)
     
     def to_json(self) -> str:
         """转换为JSON字符串"""

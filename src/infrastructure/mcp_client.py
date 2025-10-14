@@ -11,6 +11,9 @@ from config.config_loader import config_loader
 
 logger = logging.getLogger(__name__)
 
+# 记录最近一次每个工具的底层执行结果（便于上层判断成败）
+MCP_LAST_TOOL_RESULTS: Dict[str, Dict[str, Any]] = {}
+
 class MCPClient:
     """MCP Client实现（基于FastMCP官方客户端）"""
     
@@ -117,6 +120,11 @@ class MCPClient:
                         })
                         response.raise_for_status()
                         result = response.json()
+                        # 存档底层真实结果
+                        try:
+                            MCP_LAST_TOOL_RESULTS[tool] = result
+                        except Exception:
+                            pass
                         print(f"[MCPClient] Mock API 调用成功，结果: {result}")
                         return {
                             "success": True,

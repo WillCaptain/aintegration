@@ -17,9 +17,11 @@ from datetime import datetime
 from pathlib import Path
 
 from src.database.memory_repositories import MemoryDatabaseConnection
+from src.database.instance_repositories import MemoryPlanInstanceRepository, MemoryTaskInstanceRepository
 from src.core.plan_module import PlanModule
 from src.models.plan import Plan, PlanStatus
-from src.models.task import Task, TaskStatus
+from src.models.plan_instance import PlanInstance, PlanInstanceStatus
+from src.models.task_instance import TaskInstance, TaskInstanceStatus
 from src.models.listener import Listener, ListenerType
 
 @pytest.mark.regression
@@ -31,10 +33,14 @@ class TestBL001NewPlan:
     async def plan_module(self):
         """创建计划模块实例"""
         db_connection = MemoryDatabaseConnection()
+        plan_instance_repo = MemoryPlanInstanceRepository()
+        task_instance_repo = MemoryTaskInstanceRepository()
         plan_module = PlanModule(
             plan_repo=db_connection.plan_repo,
             task_repo=db_connection.task_repo,
-            listener_repo=db_connection.listener_repo
+            listener_repo=db_connection.listener_repo,
+            plan_instance_repo=plan_instance_repo,
+            task_instance_repo=task_instance_repo
         )
         await plan_module.start()
         yield plan_module
@@ -78,10 +84,11 @@ class TestBL001NewPlan:
                 {
                     "listener_id": "L001",
                     "trigger_task_id": "001",
-                    "trigger_condition": "001.status == Running",
-                    "action_condition": "true",
-                    "listener_type": "code",
-                    "code_snippet": "result = {'success': True, 'data': 'test'}",
+                    "trigger_status": "Done",
+                    "action_type": "code",
+                    "action_config": {
+                        "code": "result = {'success': True, 'data': 'test'}"
+                    },
                     "success_output": {
                         "task_id": "002",
                         "status": "Done",
@@ -112,7 +119,7 @@ class TestBL001NewPlan:
                 {
                     "task_id": "001",
                     "name": "{{main_task_name}}",
-                    "prompt": "{{main_task_prompt}}"
+                    "prompt": "{{main_task_prompt}}",
                 }
             ],
             "listeners": []
@@ -151,14 +158,10 @@ class TestBL001NewPlan:
         with open(config_file, 'r', encoding='utf-8') as f:
             loaded_config = yaml.safe_load(f)
         
-        plan_id = await plan_module.create_plan_from_config(loaded_config)
+        plan = await plan_module.create_plan_from_config(loaded_config)
         
         # 验证计划创建成功
-        assert plan_id == "config_file_plan"
-        
-        # 验证计划数据
-        plan = await plan_module.plan_manager.get_plan(plan_id)
-        assert plan is not None
+        assert plan.id == "config_file_plan"
         assert plan.name == "配置文件计划"
         assert plan.description == "从配置文件创建的计划"
         assert plan.main_task_id == "001"
@@ -166,11 +169,15 @@ class TestBL001NewPlan:
         assert plan.metadata["version"] == "1.0.0"
         assert "config" in plan.metadata["tags"]
         
-        # 验证任务创建
-        tasks = await plan_module.task_manager.get_plan_tasks(plan_id)
-        assert len(tasks) == 1
-        assert tasks[0].name == "配置任务"
-        assert tasks[0].prompt == "从配置文件执行任务"
+        # 验证任务元数据
+        assert len(plan.tasks) == 1
+        assert plan.tasks[0]["task_id"] == "001"
+        assert plan.tasks[0]["name"] == "配置任务"
+        assert plan.tasks[0]["prompt"] == "从配置文件执行任务"
+        # 主任务通过 task_instance.is_main_task() 方法判断
+        
+        # 验证侦听器元数据
+        assert len(plan.listeners) == 0
     
     # 测试用例 2: 从模板创建 Plan
     @pytest.mark.asyncio
@@ -192,25 +199,22 @@ class TestBL001NewPlan:
         plan_config["plan_id"] = "template_plan"
         
         # 创建计划
-        plan_id = await plan_module.create_plan_from_config(plan_config)
+        plan = await plan_module.create_plan_from_config(plan_config)
         
         # 验证计划创建成功
-        assert plan_id == "template_plan"
-        
-        # 验证计划数据
-        plan = await plan_module.plan_manager.get_plan(plan_id)
-        assert plan is not None
+        assert plan.id == "template_plan"
         assert plan.name == "模板计划"
         assert plan.description == "从模板创建的计划"
         assert plan.metadata["author"] == "template_user"
         assert plan.metadata["version"] == "2.0.0"
         assert "template" in plan.metadata["tags"]
         
-        # 验证任务创建
-        tasks = await plan_module.task_manager.get_plan_tasks(plan_id)
-        assert len(tasks) == 1
-        assert tasks[0].name == "模板任务"
-        assert tasks[0].prompt == "执行模板任务"
+        # 验证任务元数据
+        assert len(plan.tasks) == 1
+        assert plan.tasks[0]["task_id"] == "001"
+        assert plan.tasks[0]["name"] == "模板任务"
+        assert plan.tasks[0]["prompt"] == "执行模板任务"
+        # 主任务通过 task_instance.is_main_task() 方法判断
     
     # 测试用例 3: 通过 API 动态创建 Plan
     @pytest.mark.asyncio
@@ -252,10 +256,11 @@ class TestBL001NewPlan:
                 {
                     "listener_id": "L001",
                     "trigger_task_id": "001",
-                    "trigger_condition": "001.status == Done",
-                    "action_condition": "true",
-                    "listener_type": "code",
-                    "code_snippet": "result = {'success': True, 'next_task': '002'}",
+                    "trigger_status": "Done",
+                    "action_type": "code",
+                    "action_config": {
+                        "code": "result = {'success': True, 'next_task': '002'}"
+                    },
                     "success_output": {
                         "task_id": "002",
                         "status": "NotStarted",
@@ -271,48 +276,43 @@ class TestBL001NewPlan:
         }
         
         # 创建计划
-        plan_id = await plan_module.create_plan_from_config(api_request)
+        plan = await plan_module.create_plan_from_config(api_request)
         
         # 验证计划创建成功
-        assert plan_id == "api_plan"
-        
-        # 验证计划数据
-        plan = await plan_module.plan_manager.get_plan(plan_id)
-        assert plan is not None
+        assert plan.id == "api_plan"
         assert plan.name == "API计划"
         assert plan.description == "通过API创建的计划"
         assert plan.metadata["author"] == "api_user"
         assert plan.metadata["source"] == "api_request"
         
-        # 验证任务创建
-        tasks = await plan_module.task_manager.get_plan_tasks(plan_id)
-        assert len(tasks) == 2
-        
         # 验证任务元数据
-        task_001 = next(t for t in tasks if t.id == "001")
-        assert task_001.name == "API任务"
-        assert task_001.metadata.get("priority") == "high"
-        assert task_001.metadata.get("timeout") == "60s"
+        assert len(plan.tasks) == 2
         
-        task_002 = next(t for t in tasks if t.id == "002")
-        assert task_002.name == "API子任务"
-        assert task_002.metadata.get("priority") == "medium"
+        task_001 = next(t for t in plan.tasks if t["task_id"] == "001")
+        assert task_001["name"] == "API任务"
+        # 主任务通过 task_instance.is_main_task() 方法判断
+        assert task_001["metadata"]["priority"] == "high"
+        assert task_001["metadata"]["timeout"] == "60s"
         
-        # 验证侦听器创建
-        listeners = await plan_module.listener_manager.get_listeners_by_task("001")
-        assert len(listeners) == 1
-        assert listeners[0].id == "L001"
-        assert listeners[0].trigger_condition == "001.status == Done"
+        task_002 = next(t for t in plan.tasks if t["task_id"] == "002")
+        assert task_002["name"] == "API子任务"
+        # 子任务通过 task_instance.is_main_task() == False 判断
+        assert task_002["metadata"]["priority"] == "medium"
+        
+        # 验证侦听器元数据
+        assert len(plan.listeners) == 1
+        listener = plan.listeners[0]
+        assert listener["listener_id"] == "L001"
+        assert listener["trigger_task_id"] == "001"
+        assert listener["trigger_status"] == "Done"
+        assert listener["action_type"] == "code"
     
     # 测试用例 4: Plan 元数据管理
     @pytest.mark.asyncio
     async def test_plan_metadata_management(self, plan_module, sample_plan_config):
         """测试 Plan 元数据管理"""
         # 创建计划
-        plan_id = await plan_module.create_plan_from_config(sample_plan_config)
-        
-        # 获取计划
-        plan = await plan_module.plan_manager.get_plan(plan_id)
+        plan = await plan_module.create_plan_from_config(sample_plan_config)
         
         # 测试元数据访问
         assert plan.metadata["author"] == "test_user"
@@ -321,18 +321,18 @@ class TestBL001NewPlan:
         assert "demo" in plan.metadata["tags"]
         
         # 测试元数据更新
-        plan.set_config_value("metadata.author", "updated_user")
-        plan.set_config_value("metadata.version", "1.1.0")
-        plan.set_config_value("metadata.tags", ["test", "demo", "updated"])
+        plan.metadata["author"] = "updated_user"
+        plan.metadata["version"] = "1.1.0"
+        plan.metadata["tags"] = ["test", "demo", "updated"]
         
-        # 保存更新 - 直接更新整个 config
-        await plan_module.plan_manager.update_plan(plan_id, {
-            "config": plan.config,
+        # 保存更新
+        await plan_module.plan_manager.update_plan(plan.id, {
+            "metadata": plan.metadata,
             "description": plan.description
         })
         
         # 验证更新
-        updated_plan = await plan_module.plan_manager.get_plan(plan_id)
+        updated_plan = await plan_module.plan_manager.get_plan(plan.id)
         assert updated_plan.metadata["author"] == "updated_user"
         assert updated_plan.metadata["version"] == "1.1.0"
         assert "updated" in updated_plan.metadata["tags"]
@@ -357,7 +357,7 @@ class TestBL001NewPlan:
             await plan_module.create_plan_from_config(invalid_config)
         assert "plan_id is required" in str(exc_info.value)
         
-        # 测试无效的任务配置
+        # 测试无效的任务配置 - 现在任务元数据存储在 Plan 中，不会立即验证
         invalid_task_config = {
             "plan_id": "invalid_task_plan",
             "name": "无效任务计划",
@@ -372,9 +372,11 @@ class TestBL001NewPlan:
             "listeners": []
         }
         
-        with pytest.raises(Exception) as exc_info:
-            await plan_module.create_plan_from_config(invalid_task_config)
-        assert "name is required" in str(exc_info.value)
+        # 现在任务验证在 PlanInstance 创建时进行，这里只创建 Plan 元数据
+        plan = await plan_module.create_plan_from_config(invalid_task_config)
+        assert plan.id == "invalid_task_plan"
+        assert len(plan.tasks) == 1
+        # 任务元数据不完整，但 Plan 创建成功
         
         # 测试重复的 plan_id
         config1 = {
@@ -394,12 +396,14 @@ class TestBL001NewPlan:
         }
         
         # 创建第一个计划
-        plan_id1 = await plan_module.create_plan_from_config(config1)
-        assert plan_id1 == "duplicate_plan"
+        plan1 = await plan_module.create_plan_from_config(config1)
+        assert plan1.id == "duplicate_plan"
+        assert plan1.name == "重复计划1"
         
-        # 尝试创建重复的计划（应该覆盖或报错）
-        plan_id2 = await plan_module.create_plan_from_config(config2)
-        assert plan_id2 == "duplicate_plan"
+        # 尝试创建重复的计划（应该覆盖）
+        plan2 = await plan_module.create_plan_from_config(config2)
+        assert plan2.id == "duplicate_plan"
+        assert plan2.name == "重复计划2"
         
         # 验证最终的计划名称
         final_plan = await plan_module.plan_manager.get_plan("duplicate_plan")
@@ -418,12 +422,11 @@ class TestBL001NewPlan:
             "listeners": []
         }
         
-        plan_id = await plan_module.create_plan_from_config(empty_tasks_config)
-        assert plan_id == "empty_tasks_plan"
-        
-        plan = await plan_module.plan_manager.get_plan(plan_id)
-        assert plan is not None
+        plan = await plan_module.create_plan_from_config(empty_tasks_config)
+        assert plan.id == "empty_tasks_plan"
         assert plan.name == "空任务计划"
+        assert len(plan.tasks) == 0
+        assert len(plan.listeners) == 0
         
         # 测试空侦听器列表
         empty_listeners_config = {
@@ -440,8 +443,11 @@ class TestBL001NewPlan:
             "listeners": []
         }
         
-        plan_id = await plan_module.create_plan_from_config(empty_listeners_config)
-        assert plan_id == "empty_listeners_plan"
+        plan = await plan_module.create_plan_from_config(empty_listeners_config)
+        assert plan.id == "empty_listeners_plan"
+        assert plan.name == "空侦听器计划"
+        assert len(plan.tasks) == 1
+        assert len(plan.listeners) == 0
         
         # 测试大量任务
         large_tasks_config = {
@@ -459,12 +465,14 @@ class TestBL001NewPlan:
             "listeners": []
         }
         
-        plan_id = await plan_module.create_plan_from_config(large_tasks_config)
-        assert plan_id == "large_tasks_plan"
+        plan = await plan_module.create_plan_from_config(large_tasks_config)
+        assert plan.id == "large_tasks_plan"
+        assert plan.name == "大量任务计划"
         
         # 验证任务数量
-        tasks = await plan_module.task_manager.get_plan_tasks(plan_id)
-        assert len(tasks) == 100
+        assert len(plan.tasks) == 100
+        assert plan.tasks[0]["task_id"] == "task_001"
+        assert plan.tasks[99]["task_id"] == "task_100"
         
         # 测试特殊字符
         special_chars_config = {
@@ -487,10 +495,8 @@ class TestBL001NewPlan:
             "listeners": []
         }
         
-        plan_id = await plan_module.create_plan_from_config(special_chars_config)
-        assert plan_id == "special_chars_plan"
-        
-        plan = await plan_module.plan_manager.get_plan(plan_id)
+        plan = await plan_module.create_plan_from_config(special_chars_config)
+        assert plan.id == "special_chars_plan"
         assert plan.name == "特殊字符计划！@#$%^&*()"
         assert "中文" in plan.description
         assert "English" in plan.description

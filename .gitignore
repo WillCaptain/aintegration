@@ -16,4 +16,5 @@ venv/
 
 # Logs
 logs/
+tests/.artifacts/
 

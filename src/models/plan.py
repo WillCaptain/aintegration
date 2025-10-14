@@ -11,26 +11,36 @@ from enum import Enum
 logger = logging.getLogger(__name__)
 
 class PlanStatus(Enum):
-    """计划状态枚举"""
-    DRAFT = "draft"
-    ACTIVE = "active"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+    """计划生命周期状态枚举"""
+    DRAFT = "draft"          # 草稿状态
+    RELEASED = "released"    # 已发布状态
+    DEPRECATED = "deprecated" # 已废弃状态
+    ARCHIVED = "archived"    # 已归档状态
 
 @dataclass
 class Plan:
-    """计划模型"""
+    """计划模型（元数据模板）"""
     id: str
     name: str
     description: str
     config: Dict[str, Any]
-    status: str = PlanStatus.DRAFT.value
+    metadata: Dict[str, Any] = None  # 计划元数据
+    status: str = PlanStatus.DRAFT.value  # 计划生命周期状态
+    tasks: List[Dict[str, Any]] = None  # 任务元数据定义
+    listeners: List[Dict[str, Any]] = None  # 侦听器元数据定义
     main_task_id: Optional[str] = None
     created_at: datetime = None
     updated_at: Optional[datetime] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    
+    def __post_init__(self):
+        if self.tasks is None:
+            self.tasks = []
+        if self.listeners is None:
+            self.listeners = []
+        if self.metadata is None:
+            self.metadata = {}
+        if self.created_at is None:
+            self.created_at = datetime.now()
     
     def to_dict(self) -> Dict:
         """转换为字典"""

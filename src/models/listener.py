@@ -20,6 +20,7 @@ class Listener:
     trigger_condition: str
     action_condition: str
     listener_type: str  # "agent" 或 "code"
+    plan_instance_id: Optional[str] = None  # 所属计划实例ID（新增）
     agent_id: Optional[str] = None  # 当类型为agent时使用
     action_prompt: Optional[str] = None  # 当类型为agent时使用
     code_snippet: Optional[str] = None  # 当类型为code时使用

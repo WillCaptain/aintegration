@@ -12,7 +12,10 @@ from datetime import datetime
 from ..models.plan import Plan, PlanStatus
 from ..models.task import Task, TaskStatus
 from ..models.listener import Listener, ListenerType
+from ..models.plan_instance import PlanInstance, PlanInstanceStatus
+from ..models.task_instance import TaskInstance, TaskInstanceStatus
 from ..database.memory_repositories import MemoryPlanRepository, MemoryTaskRepository, MemoryListenerRepository
+from ..database.instance_repositories import MemoryPlanInstanceRepository, MemoryTaskInstanceRepository
 from ..core.listener_engine import ListenerEngine
 from ..core.task_driver import TaskDriver
 from ..infrastructure.llm_client import build_llm_client
@@ -29,7 +32,7 @@ class PlanManager:
     def __init__(self, plan_repo: MemoryPlanRepository):
         self.plan_repo = plan_repo
     
-    async def create_plan(self, plan_config: Dict) -> str:
+    async def create_plan(self, plan_config: Dict) -> Plan:
         """创建新的执行计划"""
         try:
             # 验证必需字段
@@ -55,13 +58,17 @@ class PlanManager:
                 name=plan_config.get("name", "未命名计划"),
                 description=plan_config.get("description") or plan_config.get("prompt") or "",
                 config=plan_config,
+                metadata=plan_config.get("metadata", {}),  # 提取元数据
+                tasks=plan_config.get("tasks", []),  # 填充任务元数据
+                listeners=plan_config.get("listeners", []),  # 填充侦听器元数据
                 main_task_id=plan_config.get("main_task_id"),
                 created_at=created_at
             )
             
             plan_id = await self.plan_repo.create(plan)
+            plan.id = plan_id  # 设置生成的ID
             logger.info(f"Created plan {plan_id}")
-            return plan_id
+            return plan  # 返回Plan对象而不是ID
             
         except Exception as e:
             logger.error(f"Failed to create plan: {e}")
@@ -110,105 +117,11 @@ class PlanManager:
         # 这里内存实现简单检查是否存在任务或监听
         raise NotImplementedError("hard_delete_plan is not implemented for memory repo yet")
 
-    async def get_plan_versions(self, plan_id: str) -> List[Dict[str, Any]]:
-        """获取计划版本历史"""
-        return await self.plan_repo.get_versions(plan_id)
-
     async def rollback_plan(self, plan_id: str, target_version: str) -> bool:
         """回滚计划到指定版本号"""
         return await self.plan_repo.rollback(plan_id, target_version)
 
-class TaskManager:
-    """任务管理器"""
-    
-    def __init__(self, task_repo: MemoryTaskRepository):
-        self.task_repo = task_repo
-    
-    async def create_task(self, task_config: Dict) -> str:
-        """创建任务"""
-        try:
-            # 验证必需字段
-            task_id = task_config.get("task_id")
-            if not task_id:
-                raise ValueError("task_id is required")
-            
-            name = task_config.get("name")
-            if not name:
-                raise ValueError("task name is required")
-            
-            task = Task(
-                id=task_id,
-                plan_id=task_config.get("plan_id"),
-                name=name,
-                prompt=task_config.get("prompt", ""),
-                status="NotStarted",
-                context={"status": "NotStarted", "values": {}, "metadata": task_config.get("metadata", {})},
-                created_at=datetime.now()
-            )
-            
-            task_id = await self.task_repo.create(task)
-            logger.info(f"Created task {task_id}")
-            return task_id
-            
-        except Exception as e:
-            logger.error(f"Failed to create task: {e}")
-            raise
-    
-    async def get_task(self, task_id: str) -> Optional[Task]:
-        """获取单个任务"""
-        return await self.task_repo.get_by_id(task_id)
-    
-    async def get_plan_tasks(self, plan_id: str) -> List[Task]:
-        """获取计划的所有任务"""
-        return await self.task_repo.get_by_plan_id(plan_id)
-    
-    async def get_task_context(self, task_id: str) -> Dict:
-        """获取任务上下文"""
-        task = await self.get_task(task_id)
-        return task.context if task else {}
 
-class ListenerManager:
-    """侦听器管理器"""
-    
-    def __init__(self, listener_repo: MemoryListenerRepository):
-        self.listener_repo = listener_repo
-    
-    async def create_listener(self, listener_config: Dict) -> str:
-        """创建侦听器"""
-        try:
-            listener = Listener(
-                id=listener_config.get("listener_id"),
-                plan_id=listener_config.get("plan_id"),
-                trigger_task_id=listener_config.get("trigger_task_id"),
-                trigger_condition=listener_config.get("trigger_condition"),
-                action_condition=listener_config.get("action_condition"),
-                listener_type=listener_config.get("listener_type"),
-                agent_id=listener_config.get("agent_id"),
-                action_prompt=listener_config.get("action_prompt"),
-                code_snippet=listener_config.get("code_snippet"),
-                success_output=listener_config.get("success_output"),
-                failure_output=listener_config.get("failure_output")
-            )
-            
-            listener_id = await self.listener_repo.create(listener)
-            logger.info(f"Created listener {listener_id}")
-            return listener_id
-            
-        except Exception as e:
-            logger.error(f"Failed to create listener: {e}")
-            raise
-    
-    async def get_listeners_by_task(self, task_id: str) -> List[Listener]:
-        """获取监听特定任务的侦听器"""
-        return await self.listener_repo.get_by_trigger_task(task_id)
-    
-    async def get_listeners_by_trigger(self, task_id: str, status: str) -> List[Listener]:
-        """获取特定触发条件的侦听器"""
-        return await self.listener_repo.get_by_trigger(task_id, status)
-    
-    async def get_listener(self, listener_id: str) -> Optional[Listener]:
-        """获取单个侦听器"""
-        return await self.listener_repo.get_by_id(listener_id)
 
 
 class PlanModule:
@@ -219,16 +132,23 @@ class PlanModule:
         plan_repo: MemoryPlanRepository, 
         task_repo: MemoryTaskRepository, 
         listener_repo: MemoryListenerRepository,
+        plan_instance_repo: Optional[MemoryPlanInstanceRepository] = None,
+        task_instance_repo: Optional[MemoryTaskInstanceRepository] = None,
         adk_integration: Optional[AgentRuntime] = None,
         a2a_client: Optional[A2AClient] = None,
         auto_register_agents: bool = True
     ):
         self.plan_manager = PlanManager(plan_repo)
-        self.task_manager = TaskManager(task_repo)
-        self.listener_manager = ListenerManager(listener_repo)
         self.plan_repo = plan_repo
         self.task_repo = task_repo
         self.listener_repo = listener_repo
+        
+        # 实例仓库
+        self.plan_instance_repo = plan_instance_repo or MemoryPlanInstanceRepository()
+        self.task_instance_repo = task_instance_repo or MemoryTaskInstanceRepository()
+        
+        # 保存adk_integration引用
+        self.adk_integration = adk_integration
         
         # 初始化任务驱动器和侦听引擎
         self.task_driver = TaskDriver(adk_integration=adk_integration)
@@ -256,13 +176,15 @@ class PlanModule:
     # 便捷设置：允许在运行时注入/替换 A2A 客户端（例如测试中绑定实际的 A2AServer）
     def set_a2a_client(self, a2a_client: A2AClient):
         self.a2a_client = a2a_client
-        self.planner_agent = PlannerAgent(self.a2a_client)
+        self.planner_agent = PlannerAgent(self.a2a_client, self.llm_client)
         # 重新注册回调以使用新的实例
         self.listener_engine.set_planner_callback(
             lambda plan_id, task_id, old_status, new_status, plan_ctx: self.planner_agent.on_task_status_change(
                 self, plan_id, task_id, old_status, new_status, plan_ctx
             )
         )
+        # 连接引擎日志到 Planner 轨迹
+        self.planner_agent.attach_engine_logger(self.listener_engine)
         
         # 注册孤立状态变化的处理
         self._register_orphaned_change_handler()
@@ -303,6 +225,11 @@ class PlanModule:
     async def start(self):
         """启动计划模块"""
         try:
+            # 连接AgentRuntime和A2AServer（如果都存在）
+            if self.adk_integration and hasattr(self.a2a_client, 'a2a_server') and self.a2a_client.a2a_server:
+                self.a2a_client.a2a_server.set_agent_runtime(self.adk_integration)
+                logger.info("AgentRuntime connected to A2AServer")
+            
             # 自动注册 Agent（如果启用）
             if self.auto_register_agents and self.a2a_client:
                 await self._auto_register_agents()
@@ -310,8 +237,14 @@ class PlanModule:
             # 初始化 Planner Agent
             if self.a2a_client:
                 self.planner_agent = PlannerAgent(self.a2a_client, self.llm_client)
-                # 注册 Planner 回调
-                self.listener_engine.set_planner_callback(self.planner_agent.on_task_status_change)
+                # 注册 Planner 回调（使用 lambda 传递 plan_module）
+                self.listener_engine.set_planner_callback(
+                    lambda plan_id, task_id, old_status, new_status, plan_ctx: self.planner_agent.on_task_status_change(
+                        self, plan_id, task_id, old_status, new_status, plan_ctx
+                    )
+                )
+                # 连接引擎日志到 Planner 轨迹
+                self.planner_agent.attach_engine_logger(self.listener_engine)
                 logger.info("Planner Agent initialized and registered")
             
             # 启动侦听引擎
@@ -352,24 +285,17 @@ class PlanModule:
                 "error": str(e)
             }
     
-    async def create_plan_from_config(self, plan_config: Dict[str, Any]) -> str:
+    async def create_plan_from_config(self, plan_config: Dict[str, Any]) -> Plan:
         """从配置创建计划"""
         try:
-            # 创建计划
-            plan_id = await self.plan_manager.create_plan(plan_config)
+            # 创建计划（包含任务和侦听器元数据）
+            plan = await self.plan_manager.create_plan(plan_config)
             
-            # 创建任务
-            for task_config in plan_config.get("tasks", []):
-                task_config["plan_id"] = plan_id
-                await self.task_manager.create_task(task_config)
+            # 注意：不再创建传统的任务和侦听器记录
+            # 所有数据现在存储在 Plan 对象中，运行时数据存储在 PlanInstance 中
             
-            # 创建侦听器
-            for listener_config in plan_config.get("listeners", []):
-                listener_config["plan_id"] = plan_id
-                await self.listener_manager.create_listener(listener_config)
-            
-            logger.info(f"Created plan {plan_id} with {len(plan_config.get('tasks', []))} tasks and {len(plan_config.get('listeners', []))} listeners")
-            return plan_id
+            logger.info(f"Created plan {plan.id} with {len(plan.tasks)} tasks and {len(plan.listeners)} listeners")
+            return plan
             
         except Exception as e:
             logger.error(f"Error creating plan from config: {e}")
@@ -397,50 +323,6 @@ class PlanModule:
                 "error": str(e)
             }
     
-    async def generate_listener_for_orphaned_change(self, task_id: str, status: str, plan_id: str, plan_context: Dict[str, Any]) -> Optional[Listener]:
-        """为孤立的状态变化生成侦听器"""
-        try:
-            # 使用LLM生成侦听器配置
-            prompt = f"""
-任务 {task_id} 的状态变更为 {status}，但没有对应的侦听器处理。
-请根据以下上下文生成一个合适的侦听器配置：
-
-计划上下文：
-{json.dumps(plan_context, ensure_ascii=False, indent=2)}
-
-请返回JSON格式的侦听器配置，包含：
-- listener_id: 侦听器ID
-- trigger_task_id: 触发任务ID
-- trigger_condition: 触发条件
-- action_condition: 行动条件
-- listener_type: 侦听器类型（agent或code）
-- agent_id: 智能体ID（如果是agent类型）
-- action_prompt: 行动提示（如果是agent类型）
-- code_snippet: 代码片段（如果是code类型）
-- success_output: 成功输出配置
-- failure_output: 失败输出配置
-"""
-            
-            response = await self.llm_client.generate(prompt)
-            
-            # 解析响应
-            try:
-                listener_config = json.loads(response)
-                listener_config["plan_id"] = plan_id
-                
-                # 创建侦听器
-                listener_id = await self.listener_manager.create_listener(listener_config)
-                logger.info(f"Generated listener {listener_id} for orphaned change: {task_id} -> {status}")
-                
-                return await self.listener_manager.get_listener(listener_id)
-                
-            except json.JSONDecodeError:
-                logger.error(f"Failed to parse LLM response as JSON: {response}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error generating listener for orphaned change: {e}")
-            return None
     
     async def get_plan_status(self, plan_id: str) -> Optional[Dict[str, Any]]:
         """获取计划状态"""
@@ -449,26 +331,16 @@ class PlanModule:
             if not plan:
                 return None
             
-            # 获取所有任务
-            tasks = await self.task_manager.get_plan_tasks(plan_id)
-            
+            # 使用 Plan 对象中的任务元数据
             return {
                 "plan_id": plan_id,
                 "plan_name": plan.name,
-                "plan_status": plan.status,
+                "plan_status": plan.status,  # Plan 的生命周期状态
                 "main_task_id": plan.main_task_id,
-                "tasks": [
-                    {
-                        "task_id": task.id,
-                        "name": task.name,
-                        "status": task.status,
-                        "context": task.context
-                    }
-                    for task in tasks
-                ],
+                "tasks": plan.tasks,  # 任务元数据
+                "listeners": plan.listeners,  # 侦听器元数据
                 "created_at": plan.created_at,
-                "started_at": plan.started_at,
-                "completed_at": plan.completed_at
+                "updated_at": plan.updated_at
             }
         except Exception as e:
             logger.error(f"Error getting plan status: {e}")
@@ -525,3 +397,110 @@ class PlanModule:
         except Exception as e:
             logger.error(f"Error searching plans: {e}")
             return []
+
+    # ========== 实例管理方法 ==========
+    
+    async def start_plan_by_prompt(self, prompt: str, plan_id: str) -> PlanInstance:
+        """根据提示启动计划，返回计划实例对象"""
+        try:
+            # 获取计划定义
+            plan = await self.plan_manager.get_plan(plan_id)
+            if not plan:
+                raise ValueError(f"Plan {plan_id} not found")
+            
+            # 创建计划实例
+            plan_instance = PlanInstance(
+                id="",  # 由仓库生成
+                plan_id=plan_id,
+                plan=plan,  # 传入计划对象
+                prompt=prompt,
+                status=PlanInstanceStatus.NOT_STARTED.value,
+                context={"values": {}, "metadata": {}}  # 临时上下文，稍后会被 start() 方法覆盖
+            )
+            
+            # 从计划元数据创建任务实例
+            for task_config in plan.tasks:
+                task_instance = TaskInstance(
+                    id="",  # 由仓库生成
+                    plan_instance_id="",  # 稍后设置
+                    task_id=task_config["task_id"],
+                    plan_id=plan_id,
+                    name=task_config["name"],
+                    status=TaskInstanceStatus.NOT_STARTED.value,
+                    parent_task_id=task_config.get("parent_task_id")
+                )
+                plan_instance.add_task_instance(task_instance)
+            
+            # 保存计划实例到仓库
+            plan_instance_id = await self.plan_instance_repo.create(plan_instance)
+            plan_instance.id = plan_instance_id
+            
+            # 更新所有任务实例的 plan_instance_id
+            for task_instance in plan_instance.get_all_task_instances():
+                task_instance.plan_instance_id = plan_instance_id
+                await self.task_instance_repo.create(task_instance)
+            
+            # 注册到侦听引擎
+            await plan_instance.register_to_listener_engine(self.listener_engine)
+            
+            logger.info(f"Created plan instance {plan_instance_id} for plan {plan_id} (status: {plan_instance.status})")
+            return plan_instance
+            
+        except Exception as e:
+            logger.error(f"Error starting plan by prompt: {e}")
+            raise
+    
+    
+    async def get_plan_instance(self, plan_instance_id: str) -> Optional[PlanInstance]:
+        """获取计划实例"""
+        return await self.plan_instance_repo.get_by_id(plan_instance_id)
+    
+    async def get_task_instance(self, plan_instance_id: str, task_id: str) -> Optional[TaskInstance]:
+        """获取任务实例"""
+        return await self.task_instance_repo.get_by_plan_instance_and_task_id(plan_instance_id, task_id)
+    
+    
+    async def get_plan_instance_tasks(self, plan_instance_id: str) -> List[TaskInstance]:
+        """获取计划实例的所有任务实例"""
+        return await self.task_instance_repo.get_by_plan_instance_id(plan_instance_id)
+    
+    async def update_task_instance_status(self, plan_instance_id: str, task_id: str, status: str, context: Dict[str, Any]):
+        """更新任务实例状态"""
+        task_instance = await self.get_task_instance(plan_instance_id, task_id)
+        if task_instance:
+            task_instance_id = task_instance.id
+            await self.task_instance_repo.update_status(task_instance_id, status, context)
+    
+    async def get_plan_instance_status(self, plan_instance_id: str) -> Optional[Dict[str, Any]]:
+        """获取计划实例状态"""
+        try:
+            plan_instance = await self.get_plan_instance(plan_instance_id)
+            if not plan_instance:
+                return None
+            
+            # 获取所有任务实例
+            task_instances = await self.get_plan_instance_tasks(plan_instance_id)
+            
+            return {
+                "plan_instance_id": plan_instance_id,
+                "plan_id": plan_instance.plan_id,
+                "status": plan_instance.status,
+                "prompt": plan_instance.prompt,
+                "tasks": [
+                    {
+                        "task_id": task.task_id,
+                        "task_instance_id": task.id,
+                        "name": task.name,
+                        "status": task.status,
+                        "context": task.context
+                    }
+                    for task in task_instances
+                ],
+                "created_at": plan_instance.created_at,
+                "started_at": plan_instance.started_at,
+                "completed_at": plan_instance.completed_at,
+                "error_info": plan_instance.error_info
+            }
+        except Exception as e:
+            logger.error(f"Error getting plan instance status: {e}")
+            return None

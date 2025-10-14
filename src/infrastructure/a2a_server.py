@@ -39,12 +39,18 @@ class A2AResponse(BaseModel):
 class A2AServer:
     """A2A Server实现"""
     
-    def __init__(self, host: str = "localhost", port: int = 8005):
+    def __init__(self, host: str = "localhost", port: int = 8005, agent_runtime=None):
         self.host = host
         self.port = port
         self.app = FastAPI(title="A2A Server", version="1.0.0")
         self.registered_agents = {}
+        self._agent_runtime = agent_runtime  # AgentRuntime引用，用于执行BizAgent
         self._setup_routes()
+    
+    def set_agent_runtime(self, agent_runtime):
+        """设置AgentRuntime（用于延迟注入）"""
+        self._agent_runtime = agent_runtime
+        logger.info(f"AgentRuntime set for A2AServer")
     
     def _setup_routes(self):
         """设置路由"""
@@ -111,48 +117,56 @@ class A2AServer:
             return {"success": True}
     
     async def _execute_agent_internal(self, agent: Dict, request: A2ARequest) -> Dict:
-        """内部Agent执行逻辑"""
+        """
+        内部Agent执行逻辑
+        
+        关键设计：
+        1. 接收PlannerAgent的语义请求（action是描述性文本）
+        2. 调用对应的BizAgent（ReactAgent）
+        3. BizAgent理解语义并自己决定调用什么工具
+        4. 返回执行结果
+        """
         try:
-            # 根据能力调用相应的工具
-            capability = request.action
+            agent_id = agent["agent_id"]
+            action = request.action  # 语义请求，如"请验证员工状态"
             parameters = request.parameters
             
-            # 调用 Mock API 进行实际验证
-            import httpx
-            import os
+            logger.info(f"[A2AServer] Executing agent {agent_id} with action: {action}")
+            logger.info(f"[A2AServer] Parameters: {parameters}")
             
-            mock_api_url = os.getenv("MOCK_API_URL", "http://127.0.0.1:8009")
-            
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{mock_api_url}/tool",
-                    json={
-                        "tool": capability,
-                        "args": parameters
-                    },
-                    timeout=10.0
-                )
+            # 从AgentRuntime获取BizAgent并执行
+            # 注意：这需要AgentRuntime的支持
+            if hasattr(self, '_agent_runtime') and self._agent_runtime:
+                # 构建执行上下文（将action和parameters组合成prompt）
+                context_prompt = f"{action}\n\n参数信息：\n"
+                for key, value in parameters.items():
+                    context_prompt += f"- {key}: {value}\n"
                 
-                if response.status_code == 200:
-                    result = response.json()
-                    return {
-                        "agent_id": agent["agent_id"],
-                        "action": request.action,
-                        "parameters": request.parameters,
-                        "execution_time": datetime.now().isoformat(),
-                        "success": result.get("success", True),
-                        "data": result.get("data", {}),
-                        "message": result.get("message", "success")
-                    }
-                else:
-                    return {
-                        "agent_id": agent["agent_id"],
-                        "action": request.action,
-                        "parameters": request.parameters,
-                        "execution_time": datetime.now().isoformat(),
-                        "success": False,
-                        "error": f"Mock API returned status {response.status_code}"
-                    }
+                logger.info(f"[A2AServer] Calling AgentRuntime.execute_agent with context: {context_prompt[:200]}...")
+                result = await self._agent_runtime.execute_agent(agent_id, context_prompt)
+                logger.info(f"[A2AServer] Agent execution completed, result: {result}")
+                
+                return {
+                    "agent_id": agent_id,
+                    "action": request.action,
+                    "parameters": request.parameters,
+                    "execution_time": datetime.now().isoformat(),
+                    "success": result.get("success", True),
+                    "response": result.get("response", ""),
+                    "tools_used": result.get("tools_used", []),
+                    "result": result.get("result", "")
+                }
+            else:
+                # 如果没有AgentRuntime，记录警告并返回错误
+                logger.warning(f"[A2AServer] No AgentRuntime available, cannot execute agent {agent_id}")
+                return {
+                    "agent_id": agent["agent_id"],
+                    "action": request.action,
+                    "parameters": request.parameters,
+                    "execution_time": datetime.now().isoformat(),
+                    "success": False,
+                    "error": "AgentRuntime not configured"
+                }
                     
         except Exception as e:
             logger.error(f"Error executing agent {agent['agent_id']}: {e}")
