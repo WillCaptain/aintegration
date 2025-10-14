@@ -589,7 +589,8 @@ class PlannerAgent:
                     "current_retry": current_retry,
                     "max_retries": self.max_retry_count
                 })
-                await self._mark_plan_error(plan_module, plan_id, task_id, current_retry, plan_instance_id)
+                # 传递failed_listener_id，供resume使用
+                await self._mark_plan_error(plan_module, plan_id, task_id, current_retry, plan_instance_id, failed_listener_id)
                 # 设置plan状态为Error
                 await plan_module.plan_repo.update(plan_id, {"status": "Error"})
                 return
@@ -753,7 +754,7 @@ class PlannerAgent:
                     "error": str(e)
                 })
     
-    async def _mark_plan_error(self, plan_module, plan_id: str, main_task_id: str, failed_retries: int, plan_instance_id: Optional[str] = None):
+    async def _mark_plan_error(self, plan_module, plan_id: str, main_task_id: str, failed_retries: int, plan_instance_id: Optional[str] = None, failed_listener_id: Optional[str] = None):
         """标记计划为错误状态"""
         # 获取task instance
         main_task = None
@@ -768,11 +769,22 @@ class PlannerAgent:
                 "status": "waiting_for_resume",
                 "message": f"Task failed after {failed_retries} retries"
             }
+            # 保存failed_listener_id供resume使用
+            if failed_listener_id:
+                main_task.context["failed_listener_id"] = failed_listener_id
+                logger.info(f"Saved failed_listener_id to main task context: {failed_listener_id}")
             main_task.status = "Error"
             
             if plan_instance_id:
                 # 更新任务实例
                 await plan_module.update_task_instance_status(plan_instance_id, main_task_id, "Error", main_task.context)
+                
+                # 设置plan_instance状态为error
+                plan_instance = await plan_module.get_plan_instance(plan_instance_id)
+                if plan_instance:
+                    plan_instance.status = PlanInstanceStatus.ERROR.value
+                    logger.info(f"Plan instance {plan_instance_id} status set to error, waiting for resume")
+                
                 logger.info(f"Plan instance {plan_instance_id} marked as error, waiting for resume")
             else:
                 # 回退到传统更新
@@ -783,40 +795,109 @@ class PlannerAgent:
                 logger.info(f"Plan {plan_id} marked as error, waiting for resume")
     
     async def resume_plan(self, plan_module, plan_id: str, plan_instance_id: Optional[str] = None) -> bool:
-        """恢复错误状态的计划"""
+        """恢复错误状态的计划（Resume机制）"""
         log_key = plan_instance_id or plan_id  # 优先使用 plan_instance_id
         logger.info(f"Resuming plan {plan_id} (instance: {plan_instance_id})")
+        print(f"[PlannerAgent] 📋 Resume plan: {plan_id}, instance: {plan_instance_id}")
         
-        # 获取计划中处于 Error 状态的任务
-        if plan_instance_id:
-            # 使用实例查询
-            tasks = await plan_module.get_plan_instance_tasks(plan_instance_id)
-            error_tasks = [t for t in tasks if t.status == "Error"]
-        else:
-            # 回退到传统查询
-            tasks = await plan_module.task_manager.get_plan_tasks(plan_id)
-            error_tasks = [t for t in tasks if t.status == "Error"]
+        execution_logger.planner_decision(plan_id, "RESUME_PLAN_STARTED", "001", {
+            "plan_instance_id": plan_instance_id
+        })
         
-        if not error_tasks:
-            logger.warning(f"No error tasks found in plan {plan_id}")
+        # 获取plan_instance和主任务
+        if not plan_instance_id:
+            logger.error(f"Resume requires plan_instance_id")
             return False
-
-        # 可选：清空该计划的重试记录，便于重新尝试
+        
+        plan_instance = await plan_module.get_plan_instance(plan_instance_id)
+        if not plan_instance:
+            logger.error(f"Plan instance {plan_instance_id} not found")
+            return False
+        
+        main_task = plan_instance.get_main_task_instance()
+        if not main_task or main_task.status != "Error":
+            logger.warning(f"Main task is not in Error status: {main_task.status if main_task else 'None'}")
+            return False
+        
+        # 从context读取failed_listener_id
+        failed_listener_id = main_task.context.get("failed_listener_id")
+        if not failed_listener_id:
+            logger.error(f"No failed_listener_id in main task context")
+            print(f"[PlannerAgent] ❌ Resume失败: 主任务context中没有failed_listener_id")
+            return False
+        
+        print(f"[PlannerAgent] ✓ 找到失败的侦听器: {failed_listener_id}")
+        
+        # 清空该计划的重试记录，允许重新尝试
         if log_key in self.task_retry_records:
+            old_records = self.task_retry_records[log_key].copy()
             self.task_retry_records[log_key] = {}
-            logger.info(f"Reset all retry records for plan {log_key}")
-
-        # 不修改任何任务状态；改为针对每个错误任务，重放其上游侦听器一次
-        replay_count = 0
-        for task in error_tasks:
-            try:
-                logger.info(f"Replaying upstream listeners for error task {task.id}")
-                await self._retrigger_upstream_listener(plan_module, plan_id, task.id, plan_instance_id)
-                replay_count += 1
-            except Exception as e:
-                logger.warning(f"Failed to replay upstream for {task.id}: {e}")
-
-        return replay_count > 0
+            print(f"[PlannerAgent] 清除重试记录: {old_records}")
+            logger.info(f"Reset retry records for plan {log_key}: {old_records}")
+        
+        # 清除error_info中的waiting_for_resume状态
+        if "error_info" in main_task.context:
+            main_task.context["error_info"]["status"] = "resuming"
+            print(f"[PlannerAgent] 设置error_info.status = resuming")
+        
+        # 恢复plan_instance状态为running（允许自我驱动循环继续）
+        print(f"[PlannerAgent] 恢复plan_instance.status: error → running")
+        plan_instance.status = PlanInstanceStatus.RUNNING.value
+        
+        # 设置主任务为Retrying状态（类似自动重试）
+        print(f"[PlannerAgent] 设置主任务为Retrying状态（resume）")
+        main_task.update_status("Retrying", "resume_retry_listener")
+        
+        # 清除failed_listener_id
+        if "failed_listener_id" in main_task.context:
+            del main_task.context["failed_listener_id"]
+        
+        execution_logger.planner_decision(plan_id, "RESUME_RETRY_LISTENER", failed_listener_id, {
+            "plan_instance_id": plan_instance_id
+        })
+        
+        # 重新执行失败的侦听器（与自动重试使用相同的逻辑）
+        try:
+            await self._retry_listener_by_id(plan_module, plan_id, failed_listener_id, plan_instance_id)
+            print(f"[PlannerAgent] ✅ Resume成功: 侦听器 {failed_listener_id} 已重新执行")
+            
+            # 不需要重新启动自我驱动循环
+            # 原因：
+            # 1. L002成功后会通过listener机制自然推进后续流程
+            # 2. 如果重新启动循环，会导致重复扫描已完成的任务，触发重复的listener
+            # 3. plan_instance.status已设置为RUNNING，如果循环还在运行会自动继续
+            
+            # 只在循环已经完全退出时才重新启动
+            import asyncio
+            if not hasattr(plan_instance, '_execution_task') or plan_instance._execution_task is None or plan_instance._execution_task.done():
+                print(f"[PlannerAgent] 自我驱动循环已退出，重新启动...")
+                try:
+                    loop = asyncio.get_running_loop()
+                    # 创建新的执行任务，但会扫描已处理的状态（这是问题所在）
+                    # 更好的方式是：不重新启动，让listener引擎继续推进流程
+                    # task = loop.create_task(plan_instance.run_self_driven())
+                    # plan_instance._execution_task = task
+                    
+                    # 实际上不需要重新启动，listener成功会继续推进流程
+                    print(f"[PlannerAgent] ⚠️ 跳过重新启动循环，由listener引擎继续推进流程")
+                except Exception as e:
+                    logger.warning(f"Failed to restart self-driven loop: {e}")
+                    print(f"[PlannerAgent] ⚠️ 检查循环状态失败: {e}")
+            else:
+                print(f"[PlannerAgent] ✅ 自我驱动循环仍在运行，无需重新启动")
+            
+            execution_logger.planner_decision(plan_id, "RESUME_PLAN_COMPLETED", "001", {
+                "plan_instance_id": plan_instance_id
+            })
+            return True
+        except Exception as e:
+            logger.error(f"Failed to resume plan {plan_id}: {e}")
+            print(f"[PlannerAgent] ❌ Resume失败: {e}")
+            execution_logger.planner_decision(plan_id, "RESUME_PLAN_ERROR", "001", {
+                "error": str(e),
+                "plan_instance_id": plan_instance_id
+            })
+            return False
 
     # 动态任务生成功能已移除，专注于状态验证和微动态规划
     # 未来可在下一个特性中重新实现

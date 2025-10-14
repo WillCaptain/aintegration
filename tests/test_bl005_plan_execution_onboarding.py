@@ -889,67 +889,58 @@ result = {
                     if response.status_code == 200:
                         print("Mock API 已就绪")
                         # 计算失败次数：
-                        # m = ReactAgent每轮调用次数（实测为2次：1初始+1重试）
-                        # Planner重试次数 = 1（见下方max_retry_count设置）
-                        # 总轮数 = 初始1轮 + Planner重试1轮 = 2轮
-                        # 总失败次数 = 2m = 4，第(2m+1)=5次resume成功
-                        m = 2  # ReactAgent每轮调用次数（根据实际观测）
-                        planner_retries = 1  # Planner重试次数
-                        total_rounds = 1 + planner_retries  # 总轮数
-                        failure_count = total_rounds * m  # 总失败次数
+                        # ReactAgent max_retries=3（每轮调用3次）
+                        # 初始1轮：3次失败 → L002失败 → 001 Error
+                        # Planner重试1轮：再3次失败 → L002再失败 → 超过max_retry_count
+                        # 总失败次数 = 3 + 3 = 6，第7次resume成功
+                        failure_count = 6  # 6次失败，第7次成功
                         await client.post(
                             f"http://127.0.0.1:{mock_port}/configure_failures",
                             json={"failures": {"grant_access": failure_count}}
                         )
-                        print(f"已配置 grant_access 前 {failure_count} 次调用失败（{total_rounds}轮×{m}次，第{failure_count+1}次resume成功）")
+                        print(f"已配置 grant_access 前 {failure_count} 次调用失败（初始3次+重试3次），第{failure_count+1}次resume成功")
                         break
             except Exception:
                 await asyncio.sleep(0.5)
         
-        # 初始化 PlanModule
+        # 初始化 PlanModule（需要传入AgentRuntime和A2AClient以支持验证）
         db = MemoryDatabaseConnection()
-        # 设置较低的重试次数以便测试
-        plan_module = PlanModule(db.plan_repo, db.task_repo, db.listener_repo)
-        await plan_module.start()
         
-        # 设置 A2A 验证功能
+        # 创建AgentRuntime和A2AServer
+        from src.infrastructure.adk_integration import AgentRuntime
         from src.infrastructure.a2a_server import A2AServer
         from src.infrastructure.a2a_client import DefaultA2AClient
+        from src.infrastructure.mcp_client import MCPClient
         
+        # 初始化MCP Client
+        mcp_client = MCPClient(f"http://127.0.0.1:{mcp_port}")
+        
+        # 初始化AgentRuntime（用于创建BizAgent）
+        adk_integration = AgentRuntime(mcp_client)
+        
+        # 从config/apps加载所有BizAgent
+        agent_count = adk_integration.load_agents_from_config("config/apps")
+        print(f"AgentRuntime已加载 {agent_count} 个agents")
+        
+        # 初始化A2AServer
         a2a_server = A2AServer()
-        await a2a_server.register_agent({
-            "agent_id": "hr_agent",
-            "agent_name": "HR Agent",
-            "provider": "internal",
-            "version": "1.0.0",
-            "capabilities": ["query_profile"],
-            "endpoints": {"execute": "/agents/hr/execute"}
-        })
-        await a2a_server.register_agent({
-            "agent_id": "inventory_agent",
-            "agent_name": "Inventory Agent",
-            "provider": "internal",
-            "version": "1.0.0",
-            "capabilities": ["check_outbound_status"],
-            "endpoints": {"execute": "/agents/inv/execute"}
-        })
-        await a2a_server.register_agent({
-            "agent_id": "access_agent",
-            "agent_name": "Access Agent",
-            "provider": "internal",
-            "version": "1.0.0",
-            "capabilities": ["query_access"],
-            "endpoints": {"execute": "/agents/access/execute"}
-        })
+        a2a_client = DefaultA2AClient(a2a_server)
         
-        # 将A2A客户端注入PlanModule
-        plan_module.set_a2a_client(DefaultA2AClient(a2a_server))
+        # 创建PlanModule，传入所有依赖
+        plan_module = PlanModule(
+            db.plan_repo, 
+            db.task_repo, 
+            db.listener_repo,
+            adk_integration=adk_integration,
+            a2a_client=a2a_client
+        )
+        await plan_module.start()
         
-        # 手动设置 Planner 的最大重试次数为 1（必须在 set_a2a_client 之后）
-        # 这样总共2轮执行：初始执行 + Planner重试1次
+        # 设置Planner的max_retry_count，确保重试1次后仍失败
+        # 初始1轮（3次）+ 重试1轮（3次）= 6次失败，然后plan error
         if plan_module.planner_agent:
             plan_module.planner_agent.max_retry_count = 1
-            print(f"已设置 Planner max_retry_count=1（初始+重试1=2轮）")
+            print(f"已设置 Planner max_retry_count=1（初始+重试1=2轮，都失败→error）")
         
         try:
             # 创建入职计划
@@ -964,10 +955,12 @@ result = {
             # 设置员工上下文
             await self._setup_employee_context(plan_module, plan_instance)
             
-            # 记录计划启动
-            execution_logger.plan_started(plan.id, "001")
+            # 启动计划实例的自我驱动执行
+            print("启动计划实例自我驱动执行...")
+            plan_instance.start()
             
             # 轮询等待计划实例进入 error 状态（Planner 重试超限）
+            print(f"等待流程执行，grant_access 会失败 {failure_count} 次（初始3+重试3），然后plan进入error状态...")
             print("等待计划进入 error（Planner 重试超限）...")
             phase1_status = await self._wait_for_plan_instance_completion(plan_module, plan_instance.id, timeout_seconds=240, poll_interval_seconds=2.0)
             print(f"Plan状态（阶段1）: {phase1_status}")
@@ -1016,11 +1009,38 @@ result = {
             assert final_status_after_resume == "done", f"Expected plan done after resume, got {final_status_after_resume}"
             assert main_task_final.status == "Done", f"Expected Done after resume, got {main_task_final.status}"
             
+            # 验证所有子任务完成
+            task_002 = plan_instance.task_instances.get("002")
+            task_003 = plan_instance.task_instances.get("003")
+            task_005 = plan_instance.task_instances.get("005")
+            task_006 = plan_instance.task_instances.get("006")
+            assert task_002.status == "Done", f"Task 002 should be Done, got {task_002.status}"
+            assert task_003.status == "Done", f"Task 003 should be Done, got {task_003.status}"
+            assert task_005.status == "Done", f"Task 005 should be Done, got {task_005.status}"
+            assert task_006.status == "Done", f"Task 006 should be Done, got {task_006.status}"
+            
             # 验证验证结果
             verification_results = main_task_final.context.get("verification_results")
             assert verification_results is not None, "Should have verification results"
             
-            print("✅ 多任务失败重试后 resume 测试通过")
+            # 验证工具调用次数
+            import json
+            with open("tests/.artifacts/mock_tool_result.log", "r") as f:
+                tool_calls = [json.loads(line) for line in f if line.strip()]
+            
+            tool_counts = {}
+            for call in tool_calls:
+                tool_name = call["tool"]
+                tool_counts[tool_name] = tool_counts.get(tool_name, 0) + 1
+            
+            print(f"\n工具调用统计: {tool_counts}")
+            
+            # 关键验证：grant_access应该调用7次（6次失败 + 1次resume成功）
+            assert tool_counts.get("grant_access") == 7, f"grant_access should be called 7 times (6 fails + 1 resume success), got {tool_counts.get('grant_access')}"
+            assert tool_counts.get("send_email") == 1, "send_email should be called once"
+            assert tool_counts.get("create_employee_profile") == 1, "create_employee_profile should be called once"
+            
+            print("✅ 多任务失败重试后 resume 测试通过 - grant_access共7次调用（6失败+1resume成功）")
             
         finally:
             # 清理

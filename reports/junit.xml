@@ -1,6 +1,6 @@
-<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="81.214" timestamp="2025-10-14T23:14:31.708222" hostname="imacdeMacBook-Air.local"><testcase classname="tests.test_bl005_plan_execution_onboarding.TestBL005PlanExecutionOnboarding" name="test_will_zhang_onboarding_with_retry_success" time="81.115"><failure message="AssertionError: Expected plan done, got error&#10;assert 'error' == 'done'&#10;  - done&#10;  + error">tests/test_bl005_plan_execution_onboarding.py:794: in test_will_zhang_onboarding_with_retry_success
-    assert plan_final_status == "done", f"Expected plan done, got {plan_final_status}"
-E   AssertionError: Expected plan done, got error
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="74.573" timestamp="2025-10-14T23:58:12.851407" hostname="imacdeMacBook-Air.local"><testcase classname="tests.test_bl005_plan_execution_onboarding.TestBL005PlanExecutionOnboarding" name="test_will_zhang_onboarding_with_multiple_retries_and_resume" time="74.484"><failure message="AssertionError: Expected plan done after resume, got error&#10;assert 'error' == 'done'&#10;  - done&#10;  + error">tests/test_bl005_plan_execution_onboarding.py:1009: in test_will_zhang_onboarding_with_multiple_retries_and_resume
+    assert final_status_after_resume == "done", f"Expected plan done after resume, got {final_status_after_resume}"
+E   AssertionError: Expected plan done after resume, got error
 E   assert 'error' == 'done'
 E     - done
 E     + error</failure></testcase></testsuite></testsuites>
