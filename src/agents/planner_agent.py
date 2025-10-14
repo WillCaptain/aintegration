@@ -24,6 +24,7 @@ from ..infrastructure.a2a_client import A2AClient
 from ..infrastructure.llm_client import build_llm_client
 from ..utils.execution_logger import execution_logger
 from ..models.plan_instance import PlanInstanceStatus
+from ..models.listener import Listener
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,14 @@ class PlannerAgent:
                 logger.debug("Planner skipped: not main task done")
                 return
 
+            # 记录到execution_logger - 模拟默认侦听器L000DONE被触发
+            print(f"[PlannerAgent] ✅ 处理001 Done，模拟触发默认侦听器 listener_id: L000DONE")
+            execution_logger.planner_decision(plan_id, "DONE_HANDLER_TRIGGERED", task_id, {
+                "virtual_listener_id": "L000DONE",
+                "trigger": "001.status == Done",
+                "plan_instance_id": plan_instance_id
+            })
+            
             logger.info(f"Planner verification triggered: main task {task_id} done in plan {plan_id}")
             
             # 设置plan状态为Done
@@ -159,10 +168,62 @@ class PlannerAgent:
         """根据listener_id重新执行该侦听器（直接调用，不触发状态变化）"""
         execution_logger.planner_decision(plan_id, "RETRY_LISTENER_BY_ID", listener_id, {"plan_instance_id": plan_instance_id})
         
-        # 获取侦听器
-        listener = await plan_module.listener_manager.listener_repo.get_by_id(listener_id)
+        print(f"[Planner] 🔄 开始重试侦听器: {listener_id}")
+        
+        # 获取plan_instance获取listener
+        listener = None
+        if plan_instance_id:
+            plan_instance = await plan_module.get_plan_instance(plan_instance_id)
+            if plan_instance and plan_instance.plan:
+                # 从plan.listeners中查找
+                # listener_id格式：inst_000001_L002，需要提取L002部分
+                # plan.listeners中的listener.id是原始ID（如L002）
+                original_listener_id = listener_id.replace(f"{plan_instance_id}_", "")
+                print(f"[Planner] 查找侦听器: {listener_id} (原始ID: {original_listener_id})")
+                
+                for l in plan_instance.plan.listeners:
+                    # plan.listeners是Dict列表，不是Listener对象列表！
+                    l_id = l.get('listener_id') if isinstance(l, dict) else l.id
+                    print(f"[Planner] 检查侦听器: l_id={l_id}, 目标={original_listener_id}, 类型={type(l)}")
+                    
+                    if l_id == original_listener_id:
+                        # 找到了！从dict创建Listener对象
+                        print(f"[Planner] ✓ 从plan.listeners找到原始侦听器: {l_id}")
+                        print(f"[Planner] listener配置: {l}")
+                        
+                        # 从dict创建listener对象
+                        try:
+                            listener = Listener(
+                                id=listener_id,  # 使用完整ID（带plan_instance_id前缀）
+                                plan_id=plan_id,
+                                trigger_task_id=l.get('trigger_task_id'),
+                                trigger_condition=l.get('trigger_condition', l.get('trigger_status', 'Done')),
+                                action_condition='execute',
+                                listener_type=l.get('listener_type', l.get('action_type', 'agent')),
+                                plan_instance_id=plan_instance_id,
+                                agent_id=l.get('agent_id'),
+                                action_prompt=l.get('action_prompt'),
+                                code_snippet=l.get('code_snippet'),
+                                success_output=l.get('success_output'),
+                                failure_output=l.get('failure_output')
+                            )
+                            print(f"[Planner] ✓ 创建侦听器实例成功: id={listener.id}, agent_id={listener.agent_id}, type={listener.listener_type}")
+                            break
+                        except Exception as e:
+                            print(f"[Planner] ❌ 创建侦听器实例失败: {e}")
+                            import traceback
+                            print(f"[Planner] 错误堆栈:\n{traceback.format_exc()}")
+                            raise
+        
+        if not listener:
+            # 回退：从listener_repo查找
+            print(f"[Planner] 尝试从listener_repo查找: {listener_id}")
+            listener = await plan_module.listener_manager.listener_repo.get_by_id(listener_id)
+        
         if not listener:
             logger.warning(f"Listener {listener_id} not found for retry")
+            print(f"[Planner] ❌ 未找到侦听器: {listener_id}")
+            execution_logger.planner_decision(plan_id, "RETRY_LISTENER_ERROR", listener_id, {"error": "Listener not found"})
             return
         
         print(f"[Planner] 获取到侦听器: id={listener.id}, type={listener.listener_type}, agent_id={getattr(listener, 'agent_id', None)}")
@@ -176,18 +237,55 @@ class PlannerAgent:
         print(f"[Planner] plan_context内容: tasks数量={len(plan_context.get('tasks', {}))}")
         print(f"[Planner] 主任务001 context keys: {list(plan_context.get('tasks', {}).get('001', {}).get('context', {}).keys())}")
         
-        # 使用与状态变化相同的方式执行侦听器：调用_execute_triggered_listeners
+        # 检查是否找到了listener
+        if not listener:
+            print(f"[Planner] ❌ CRITICAL: listener is None after search!")
+            execution_logger.planner_decision(plan_id, "RETRY_LISTENER_ERROR", listener_id, {"error": "listener is None"})
+            return
+        
+        print(f"[Planner] ✅ Listener found and ready: id={listener.id}, type={listener.listener_type}")
+        
+        # 重试listener：直接执行，不需要修改_executed_listeners（它只是历史记录）
         try:
-            logger.info(f"Retrying listener {listener_id} via _execute_triggered_listeners")
-            print(f"[Planner] 通过_execute_triggered_listeners重试侦听器 {listener_id}")
+            logger.info(f"Retrying listener {listener_id}")
+            print(f"[Planner] 🔄 重试侦听器 {listener_id}")
             
-            # 使用ListenerEngine的_execute_triggered_listeners方法，确保执行路径完全一致
-            await plan_module.listener_engine._execute_triggered_listeners([listener], plan_context)
+            # 如果有plan_instance，直接通过PlanInstance执行listener
+            if plan_instance_id:
+                plan_instance = await plan_module.get_plan_instance(plan_instance_id)
+                if plan_instance:
+                    # 直接执行listener，不修改_executed_listeners（保持历史记录完整）
+                    print(f"[Planner] 📌 通过PlanInstance执行侦听器...")
+                    result = await plan_module.listener_engine.execute_listener(listener, plan_instance)
+                    print(f"[Planner] 📊 侦听器执行结果: success={result.get('success')}, task_updates={len(result.get('task_updates', []))}")
+                    
+                    # 应用结果（success_output会设置对应的task状态）
+                    print(f"[Planner] 📝 应用侦听器结果...")
+                    await plan_instance._apply_listener_result(result)
+                    print(f"[Planner] ✅ 侦听器结果已应用")
+                    
+                    execution_logger.planner_decision(plan_id, "RETRY_LISTENER_COMPLETED", listener_id, {
+                        "success": result.get('success', False),
+                        "task_updates_count": len(result.get('task_updates', []))
+                    })
+                else:
+                    print(f"[Planner] ⚠️ plan_instance not found, fallback to old way")
+                    # 回退到老方式
+                    await plan_module.listener_engine._execute_triggered_listeners([listener], plan_context)
+                    execution_logger.planner_decision(plan_id, "RETRY_LISTENER_COMPLETED", listener_id, {})
+            else:
+                print(f"[Planner] ⚠️ No plan_instance_id, using old way")
+                # 没有plan_instance_id，使用老方式
+                await plan_module.listener_engine._execute_triggered_listeners([listener], plan_context)
+                execution_logger.planner_decision(plan_id, "RETRY_LISTENER_COMPLETED", listener_id, {})
             
-            execution_logger.planner_decision(plan_id, "RETRY_LISTENER_COMPLETED", listener_id, {})
             logger.info(f"Retried listener {listener_id} successfully")
+            print(f"[Planner] ✅ 侦听器重试成功: {listener_id}")
         except Exception as e:
             logger.warning(f"Failed to retry listener {listener_id}: {e}")
+            print(f"[Planner] ❌ 侦听器重试失败: {listener_id}, error={e}")
+            import traceback
+            print(f"[Planner] 错误堆栈:\n{traceback.format_exc()}")
             execution_logger.planner_decision(plan_id, "RETRY_LISTENER_ERROR", listener_id, {"error": str(e)})
 
     async def _extract_executed_agents_from_plan(self, plan_module, plan_id: str, plan_instance_id: Optional[str], log_key: str) -> List[Dict[str, Any]]:
@@ -390,27 +488,60 @@ class PlannerAgent:
         log_key = plan_instance_id or plan_id  # 优先使用 plan_instance_id
         logger.info(f"Planner handling task error: plan={plan_id}, task={task_id}, is_main={is_main_task}, instance={plan_instance_id}")
         
+        # 记录到execution_logger - 模拟默认侦听器L000ERROR被触发
+        print(f"[PlannerAgent] 🔴 处理001 Error，模拟触发默认侦听器 listener_id: L000ERROR")
+        execution_logger.planner_decision(plan_id, "ERROR_HANDLER_TRIGGERED", task_id, {
+            "virtual_listener_id": "L000ERROR",
+            "trigger": "001.status == Error",
+            "plan_instance_id": plan_instance_id
+        })
+        
         # 检查主任务是否已经在"等待resume"状态，如果是，不做重试
         if is_main_task:
-            # 使用统一的查询方法，优先实例查询
-            task = await plan_module.get_task_with_instance_fallback(task_id, plan_instance_id)
-            if task and task.context.get("error_info", {}).get("status") == "waiting_for_resume":
+            # 获取task instance
+            task = None
+            if plan_instance_id:
+                plan_instance = await plan_module.get_plan_instance(plan_instance_id)
+                if plan_instance:
+                    task = plan_instance.get_task_instance(task_id)
+            
+            if task and hasattr(task, 'context') and task.context.get("error_info", {}).get("status") == "waiting_for_resume":
                 logger.info(f"Main task {task_id} already in waiting_for_resume state, skip retry")
                 return
             
-            # 主任务Error：从plan_run_logs找到导致Error的侦听器，重试该侦听器
+            # 主任务Error：找到导致Error的侦听器，重试该侦听器
             # 而不是重试主任务本身
             
             # 初始化重试记录
             if log_key not in self.task_retry_records:
                 self.task_retry_records[log_key] = {}
             
-            # 使用侦听器ID作为重试计数的key
-            failed_listener_id = self._find_failed_listener_from_logs(log_key, task_id)
+            # 优先从task context中读取failed_listener_id（新的默认机制）
+            failed_listener_id = None
+            task_context = plan_context.get("tasks", {}).get(task_id, {}).get("context", {})
+            print(f"[PlannerAgent] Task {task_id} context keys: {list(task_context.keys())}")
+            print(f"[PlannerAgent] Looking for failed_listener_id in context...")
+            failed_listener_id = task_context.get("failed_listener_id")
+            print(f"[PlannerAgent] failed_listener_id from context: {failed_listener_id}")
+            
+            if failed_listener_id:
+                logger.info(f"Found failed listener from task context: {failed_listener_id}")
+            else:
+                # 回退到从plan_run_logs查找（向后兼容）
+                print(f"[PlannerAgent] failed_listener_id not in context, checking plan_run_logs...")
+                failed_listener_id = self._find_failed_listener_from_logs(log_key, task_id)
+                if failed_listener_id:
+                    logger.info(f"Found failed listener from plan_run_logs: {failed_listener_id}")
+                else:
+                    print(f"[PlannerAgent] failed_listener_id not found in plan_run_logs either")
+            
             if not failed_listener_id:
                 logger.warning(f"Cannot find failed listener for main task {task_id}")
+                print(f"[PlannerAgent] ERROR: Cannot find failed_listener_id, marking plan as error")
                 await self._mark_plan_error(plan_module, plan_id, task_id, 0, plan_instance_id)
                 return
+            
+            print(f"[PlannerAgent] ✓ Found failed listener: {failed_listener_id}, proceeding with retry...")
             
             # 获取该侦听器的重试次数
             retry_key = f"listener_{failed_listener_id}"
@@ -429,7 +560,25 @@ class PlannerAgent:
                     "plan_instance_id": plan_instance_id
                 })
                 
-                # 不改变主任务状态（保持Error），只重新执行失败的侦听器
+                # 将主任务设置为Retrying状态
+                # 其他侦听器不会响应Retrying状态，避免重复触发
+                # 只有L007（完成侦听器）会在所有子任务完成后将001设置为Done
+                if plan_instance_id:
+                    plan_instance = await plan_module.get_plan_instance(plan_instance_id)
+                    if plan_instance:
+                        main_task_instance = plan_instance.get_main_task_instance()
+                        if main_task_instance:
+                            # 清除failed_listener_id
+                            if "failed_listener_id" in main_task_instance.context:
+                                del main_task_instance.context["failed_listener_id"]
+                            # 添加重试标记
+                            main_task_instance.context["retry_attempt"] = current_retry
+                            # 设置为Retrying状态（不会触发其他侦听器）
+                            print(f"[PlannerAgent] 设置主任务为Retrying状态（attempt {current_retry}）")
+                            main_task_instance.update_status("Retrying", f"retry_listener_{failed_listener_id}_attempt_{current_retry}")
+                            logger.info(f"Set main task {task_id} to Retrying status for retry attempt {current_retry}")
+                
+                # 重新执行失败的侦听器
                 # 侦听器成功后会自然推进流程，最终通过L007将主任务设为Done
                 await self._retry_listener_by_id(plan_module, plan_id, failed_listener_id, plan_instance_id)
                 return
@@ -513,8 +662,13 @@ class PlannerAgent:
     
     async def _retry_task(self, plan_module, task_id: str, retry_attempt: int, plan_instance_id: Optional[str] = None):
         """重试任务：重置任务状态"""
-        # 使用统一的查询方法，优先实例查询
-        task = await plan_module.get_task_with_instance_fallback(task_id, plan_instance_id)
+        # 获取task instance
+        task = None
+        if plan_instance_id:
+            plan_instance = await plan_module.get_plan_instance(plan_instance_id)
+            if plan_instance:
+                task = plan_instance.get_task_instance(task_id)
+        
         if not task:
             logger.error(f"Task {task_id} not found for retry")
             return
@@ -601,8 +755,13 @@ class PlannerAgent:
     
     async def _mark_plan_error(self, plan_module, plan_id: str, main_task_id: str, failed_retries: int, plan_instance_id: Optional[str] = None):
         """标记计划为错误状态"""
-        # 使用统一的查询方法，优先实例查询
-        main_task = await plan_module.get_task_with_instance_fallback(main_task_id, plan_instance_id)
+        # 获取task instance
+        main_task = None
+        if plan_instance_id:
+            plan_instance = await plan_module.get_plan_instance(plan_instance_id)
+            if plan_instance:
+                main_task = plan_instance.get_task_instance(main_task_id)
+        
         if main_task:
             main_task.context["error_info"] = {
                 "failed_retries": failed_retries,

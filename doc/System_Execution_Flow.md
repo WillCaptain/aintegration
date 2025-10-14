@@ -245,6 +245,67 @@ self.plan_run_logs: Dict[str, List[Dict[str, Any]]] = {}
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## 默认错误处理机制
+
+### 错误侦听器（类似Done侦听器）
+
+**设计原则**：与"001 Done触发验证"类似，"001 Error触发重试"也是默认机制
+
+#### 1. 自动Error设置（无需配置）
+```python
+# TaskDriver默认行为：任何listener执行失败
+if not is_success and not listener.failure_output:
+    # 自动设置主任务001为Error
+    updates.append({
+        "task_id": "001",
+        "status": "Error",
+        "context": {
+            "failed_listener_id": listener.id,  # 记录失败的侦听器
+            "error": execution_result.get("error")
+        }
+    })
+```
+
+#### 2. 自动重试（默认侦听器）
+```
+001状态变为Error → 触发planner_callback → PlannerAgent.on_task_status_change()
+  ↓
+PlannerAgent._handle_task_error()
+  ↓
+从task_001.context读取failed_listener_id
+  ↓
+检查重试次数 < max_retry_count
+  ↓
+重置task_001.status = "Running"（清除Error）
+  ↓
+重新执行失败的侦听器
+  ↓
+成功 → 继续正常流程
+失败 → 再次Error → 继续重试（直到达到max_retry_count）
+```
+
+#### 3. 重试流程示例
+```
+L002执行 → grant_access失败
+  ↓
+TaskDriver设置：
+  task_001.status = "Error"
+  task_001.context["failed_listener_id"] = "inst_000001_L002"
+  ↓
+PlannerAgent检测到Error
+  ↓
+读取failed_listener_id = "inst_000001_L002"
+  ↓
+重试次数1 < max_retry_count(3)
+  ↓
+重置：task_001.status = "Running"
+清除：task_001.context["failed_listener_id"]
+  ↓
+重新执行L002 → grant_access
+  ↓
+成功 → task_005 = "Done" → 触发后续侦听器 → 继续执行
+```
+
 ## 注意事项
 
 1. **Agent ID匹配**：确保计划配置中的agent_id与配置文件中的name字段匹配
@@ -253,3 +314,5 @@ self.plan_run_logs: Dict[str, List[Dict[str, Any]]] = {}
 4. **资源清理**：测试完成后正确清理资源
 5. **验证工具**：每个BizAgent的app配置应包含对应的验证工具（如query_profile）
 6. **A2A通信**：PlannerAgent与BizAgent之间通过A2A协议通信，发送语义请求
+7. **错误处理**：工具失败自动触发重试，无需在plan config中配置failure_output
+8. **重试次数**：默认max_retry_count=3，可通过PlannerAgent配置调整

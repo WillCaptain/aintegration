@@ -86,8 +86,23 @@ class TaskInstance:
     def update_status(self, new_status: str, reason: str = "manual_update"):
         """更新任务状态并记录轨迹（由外部驱动）"""
         if new_status != self.status:
+            old_status = self.status
             self.status = new_status
             self._add_status_trace(new_status, reason)
+            
+            # 记录到execution_logger
+            try:
+                from src.utils.execution_logger import execution_logger
+                execution_logger.task_status_change(
+                    plan_id=self.plan_id,
+                    task_id=self.task_id,
+                    old_status=old_status,
+                    new_status=new_status,
+                    triggered_by=reason
+                )
+            except Exception as e:
+                # 日志记录失败不应影响主流程
+                pass
     
     def _add_status_trace(self, status: str, reason: str):
         """添加状态变化轨迹"""

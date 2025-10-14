@@ -107,6 +107,17 @@ class PlanInstance:
             self.started_at = datetime.now()
             self.updated_at = datetime.now()
             
+            # 记录plan启动
+            try:
+                from src.utils.execution_logger import execution_logger
+                main_task = self.get_main_task_instance()
+                execution_logger.plan_started(
+                    plan_id=self.plan_id,
+                    main_task_id=main_task.task_id if main_task else "001"
+                )
+            except:
+                pass
+            
             # 开始自我驱动执行（异步）
             import asyncio
             try:
@@ -220,6 +231,18 @@ class PlanInstance:
                 logger.info(f"Listener {listener.id} already executed for plan instance {self.id}, skipping")
                 continue
             
+            # 记录Listener被触发
+            try:
+                from src.utils.execution_logger import execution_logger
+                execution_logger.listener_triggered(
+                    plan_id=self.plan_id,
+                    listener_id=listener.id,
+                    trigger_task_id=listener.trigger_task_id,
+                    trigger_condition=listener.trigger_condition
+                )
+            except:
+                pass
+            
             print(f"[PlanInstance] Executing listener {listener.id} for task {task_id}")
             logger.info(f"Executing listener {listener.id} for task {task_id}")
             result = await self._listener_engine.execute_listener(listener, self)
@@ -228,13 +251,25 @@ class PlanInstance:
             # 标记该侦听器已执行
             self._executed_listeners.add(listener.id)
             
+            # 记录Listener执行结果
+            try:
+                from src.utils.execution_logger import execution_logger
+                execution_logger.listener_executed(
+                    plan_id=self.plan_id,
+                    listener_id=listener.id,
+                    success=result.get('success', False),
+                    target_updates=result.get('task_updates', [])
+                )
+            except:
+                pass
+            
             # 应用侦听器结果
             await self._apply_listener_result(result)
     
     async def _apply_listener_result(self, result: Dict[str, Any]):
         """应用侦听器执行结果"""
         if result.get('success', False):
-            # 应用任务更新
+            # 应用任务更新（包括success_output中定义的状态更新）
             task_updates = result.get('task_updates', [])
             for update in task_updates:
                 target_task_id = update.get('task_id')
@@ -259,11 +294,35 @@ class PlanInstance:
             error_msg = result.get('error', 'Unknown error')
             logger.error(f"Listener execution failed: {error_msg}")
             
-            # 如果主任务出错，标记计划实例为错误状态
+            # 关键：失败时也要应用task_updates（包括设置001 Error的默认行为）
+            task_updates = result.get('task_updates', [])
+            print(f"[PlanInstance] Applying {len(task_updates)} task updates from failed listener")
+            for update in task_updates:
+                target_task_id = update.get('task_id')
+                new_status = update.get('status')
+                reason = update.get('reason', 'listener_failure')
+                context_update = update.get('context', {})
+                
+                if target_task_id and new_status:
+                    # 关键：先更新任务上下文，再更新状态
+                    # 因为update_task_status会触发planner_callback，需要确保context已包含failed_listener_id
+                    if context_update:
+                        task_instance = self.get_task_instance(target_task_id)
+                        if task_instance:
+                            if not hasattr(task_instance, 'context') or task_instance.context is None:
+                                task_instance.context = {}
+                            task_instance.context.update(context_update)
+                            print(f"[PlanInstance] Updated task {target_task_id} context BEFORE status update: {context_update}")
+                    
+                    # 然后更新任务状态（会触发planner_callback）
+                    self.update_task_status(target_task_id, new_status, reason)
+                    print(f"[PlanInstance] Updated task {target_task_id} status to {new_status}")
+            
+            # 如果主任务出错，标记计划实例为错误状态（但不终止，等待PlannerAgent重试）
             main_task = self.get_main_task_instance()
             if main_task and main_task.status == "Error":
-                self.status = PlanInstanceStatus.ERROR.value
-                self.updated_at = datetime.now()
+                logger.warning(f"Main task is Error, waiting for PlannerAgent retry...")
+                # 注意：不设置plan_instance.status为error，让它继续运行等待重试
     
     def _start_main_task(self):
         """启动主任务"""
@@ -387,10 +446,11 @@ class PlanInstance:
         """发布任务状态变化事件"""
         logger.info(f"Task {task_instance.task_id} status changed: {old_status} -> {new_status} ({reason})")
         
-        # 触发planner回调（如果任务001变为Done，需要触发验证）
+        # 触发planner回调（任务001变为Done或Error时触发）
         if hasattr(self, '_listener_engine') and self._listener_engine:
             # 获取planner回调
             planner_callback = self._listener_engine._planner_callback
+            print(f"[PlanInstance] _listener_engine exists, planner_callback exists: {planner_callback is not None}")
             if planner_callback:
                 # 构建plan_context
                 plan_context = {

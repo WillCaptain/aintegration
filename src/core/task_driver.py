@@ -82,24 +82,36 @@ class TaskDriver:
                 # 使用 ReactAgent 直接执行
                 result = await self._execute_with_adk(listener.agent_id, prompt, plan_context)
             
-            # 如果执行成功，根据侦听器的success_output生成task_updates
-            if result.get('success', False) and listener.success_output:
-                print(f"[TaskDriver] Agent执行成功，生成task_updates")
-                task_updates = [{
-                    'task_id': listener.success_output.get('task_id'),
-                    'status': listener.success_output.get('status'),
-                    'reason': 'listener_success',
-                    'context': listener.success_output.get('context', {})
-                }]
+            # 根据执行结果生成task_updates
+            if result.get('success', False):
+                # 成功：使用success_output
+                if listener.success_output:
+                    print(f"[TaskDriver] Agent执行成功，生成task_updates")
+                    task_updates = [{
+                        'task_id': listener.success_output.get('task_id'),
+                        'status': listener.success_output.get('status'),
+                        'reason': 'listener_success',
+                        'context': listener.success_output.get('context', {})
+                    }]
+                    result['task_updates'] = task_updates
+                    print(f"[TaskDriver] 生成的task_updates: {task_updates}")
+            else:
+                # 失败：调用determine_task_updates生成默认更新（包括001 Error）
+                print(f"[TaskDriver] Agent执行失败，调用determine_task_updates生成默认更新")
+                task_updates = self.determine_task_updates(listener, result)
                 result['task_updates'] = task_updates
-                print(f"[TaskDriver] 生成的task_updates: {task_updates}")
+                print(f"[TaskDriver] 失败生成的task_updates: {task_updates}")
             
             return result
                 
         except Exception as e:
             print(f"[TaskDriver] 执行 Agent 侦听器 {listener.id} 时出错: {e}")
             logger.error(f"Error executing agent listener {listener.id}: {e}")
-            return {"success": False, "error": str(e)}
+            error_result = {"success": False, "error": str(e)}
+            # 生成默认的错误更新
+            task_updates = self.determine_task_updates(listener, error_result)
+            error_result['task_updates'] = task_updates
+            return error_result
     
     async def _execute_code_listener(self, listener: Listener, plan_context: Dict[str, Any]) -> Dict[str, Any]:
         """执行代码侦听器"""
@@ -110,23 +122,35 @@ class TaskDriver:
             # 在安全环境中执行代码
             result = await self._execute_code_safely(listener.code_snippet, plan_context)
             
-            # 如果执行成功且代码没有返回task_updates，根据侦听器的success_output生成task_updates
-            if result.get('success', False) and not result.get('task_updates') and listener.success_output:
-                print(f"[TaskDriver] 代码执行成功，生成task_updates")
-                task_updates = [{
-                    'task_id': listener.success_output.get('task_id'),
-                    'status': listener.success_output.get('status'),
-                    'reason': 'listener_success',
-                    'context': listener.success_output.get('context', {})
-                }]
+            # 根据执行结果生成task_updates
+            if result.get('success', False):
+                # 成功：如果代码没有返回task_updates，使用success_output
+                if not result.get('task_updates') and listener.success_output:
+                    print(f"[TaskDriver] 代码执行成功，生成task_updates")
+                    task_updates = [{
+                        'task_id': listener.success_output.get('task_id'),
+                        'status': listener.success_output.get('status'),
+                        'reason': 'listener_success',
+                        'context': listener.success_output.get('context', {})
+                    }]
+                    result['task_updates'] = task_updates
+                    print(f"[TaskDriver] 生成的task_updates: {task_updates}")
+            else:
+                # 失败：调用determine_task_updates生成默认更新（包括001 Error）
+                print(f"[TaskDriver] 代码执行失败，调用determine_task_updates生成默认更新")
+                task_updates = self.determine_task_updates(listener, result)
                 result['task_updates'] = task_updates
-                print(f"[TaskDriver] 生成的task_updates: {task_updates}")
+                print(f"[TaskDriver] 失败生成的task_updates: {task_updates}")
             
             return result
             
         except Exception as e:
             logger.error(f"Error executing code listener {listener.id}: {e}")
-            return {"success": False, "error": str(e)}
+            error_result = {"success": False, "error": str(e)}
+            # 生成默认的错误更新
+            task_updates = self.determine_task_updates(listener, error_result)
+            error_result['task_updates'] = task_updates
+            return error_result
     
     def _build_prompt_with_context(self, prompt: str, plan_context: Dict[str, Any]) -> str:
         """构建包含上下文变量的提示词"""
@@ -354,17 +378,30 @@ class TaskDriver:
             else:
                 # 默认行为：失败时设置主任务为Error（触发Planner重试）
                 # 约定：主任务ID默认为"001"
-                # 不添加error到context，避免污染重试时的上下文
-                print(f"[TaskDriver] 失败但无failure_output，使用默认行为：设置主任务001 Error（不添加error上下文）")
-                updates.append({
+                # 关键：在context中记录失败的listener_id，供PlannerAgent读取并重试
+                print(f"[TaskDriver] ⚠️ 失败但无failure_output，使用默认行为：设置主任务001 Error并记录失败的listener_id")
+                print(f"[TaskDriver] 失败的listener: {listener.id}")
+                print(f"[TaskDriver] 错误信息: {execution_result.get('error', 'Unknown error')}")
+                
+                update_to_add = {
                     "task_id": "001",
                     "status": "Error",
-                    "context": {},  # 空context，不污染
+                    "context": {
+                        "failed_listener_id": listener.id,  # 记录失败的侦听器ID
+                        "error": execution_result.get("error", "Unknown error"),
+                        "error_info": {
+                            "listener_id": listener.id,
+                            "agent_id": listener.agent_id if hasattr(listener, 'agent_id') else None,
+                            "error_message": execution_result.get("error", "Unknown error")
+                        }
+                    },
                     "execution_result": execution_result,
                     "error": execution_result.get("error", "Unknown error"),
                     "plan_instance_id": listener.plan_instance_id  # 添加 plan_instance_id
-                })
-                print(f"[TaskDriver] 添加默认失败更新: {updates[-1]}")
+                }
+                updates.append(update_to_add)
+                print(f"[TaskDriver] ✓ 添加默认失败更新: {update_to_add}")
+                print(f"[TaskDriver] context包含: failed_listener_id={listener.id}")
         
         print(f"[TaskDriver] 最终更新列表: {updates}")
         return updates
@@ -420,10 +457,11 @@ class TaskDriver:
                     "task_updates": agent_result.get("task_updates", [])
                 }
             else:
+                # 失败时也要返回task_updates（包括默认的001 Error）
                 return {
                     "success": False,
                     "error": agent_result.get("reason", "Unknown error"),
-                    "task_updates": []
+                    "task_updates": agent_result.get("task_updates", [])
                 }
                 
         except Exception as e:
@@ -457,10 +495,11 @@ class TaskDriver:
                     "task_updates": code_result.get("task_updates", [])
                 }
             else:
+                # 失败时也要返回task_updates
                 return {
                     "success": False,
                     "error": code_result.get("reason", "Unknown error"),
-                    "task_updates": []
+                    "task_updates": code_result.get("task_updates", [])
                 }
                 
         except Exception as e:

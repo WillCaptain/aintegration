@@ -74,6 +74,19 @@ class TestBL005PlanExecutionOnboarding:
                 print(f"计划实例 {plan_instance_id} 执行完成，状态: {plan_instance.status}")
                 return plan_instance.status
             await asyncio.sleep(poll_interval_seconds)
+        
+        # 超时时打印调试信息
+        plan_instance = await plan_module.get_plan_instance(plan_instance_id)
+        if plan_instance:
+            print(f"超时时plan_instance状态: {plan_instance.status}")
+            main_task = plan_instance.get_main_task_instance()
+            if main_task:
+                print(f"超时时主任务状态: {main_task.status}")
+                print(f"超时时主任务context keys: {list(main_task.context.keys())}")
+            print(f"超时时所有任务状态:")
+            for tid, ti in plan_instance.task_instances.items():
+                print(f"  {tid}: {ti.status}")
+        
         raise TimeoutError(f"计划实例 {plan_instance_id} 执行超时（{timeout_seconds}秒）")
 
     async def _get_task_for_instance(self, plan_module: PlanModule, plan_instance_id: str, plan_id: str, task_id: str):
@@ -658,7 +671,11 @@ result = {
     
     @pytest.mark.asyncio
     async def test_will_zhang_onboarding_with_retry_success(self, env_setup):
-        """测试张威入职流程 - 门禁失败后重试成功（微动态规划）"""
+        """
+        测试张威入职流程 - 门禁失败后重试成功（微动态规划）
+        Biz Agent会尝试n=3次调用目标工具，如果失败，驱动001 error,并且上下文中带入失败的侦听器Id
+        Planner Agent会根据错误重启尝试执行改失败的侦听器，本此时模拟重试充公
+        """
         print("\n=== 测试入职流程：门禁失败后重试成功 ===")
         
         # 启用执行日志
@@ -692,11 +709,15 @@ result = {
                     if response.status_code == 200:
                         print("Mock API 已就绪")
                         # 计算失败次数（参数化配置）：
-                        # m = ReactAgent每轮调用次数（实测为2次：1初始+1重试）
-                        # 本测试：第1轮失败（m次），Planner重试1次后第2轮成功（第m+1次）
-                        # 失败次数 = m = 2，第(m+1)=3次成功
-                        m = 2  # ReactAgent每轮调用次数（根据实际观测）
-                        failure_count = m  # 第1轮失败，第2轮成功
+                        # ReactAgent有max_retries=3的内部重试机制
+                        # 要让第一次listener执行失败，需要失败次数 >= ReactAgent的max_retries
+                        # 然后PlannerAgent重试listener，第二次执行成功
+                        
+                        # 方案：让grant_access前3次都失败（ReactAgent重试3次都失败）
+                        # 第4次成功（PlannerAgent重试后ReactAgent第1次尝试就成功）
+                        failure_count = 3  # ReactAgent的max_retries次数
+                        print(f"配置grant_access前{failure_count}次失败（ReactAgent重试用尽）")
+                        print(f"第{failure_count+1}次成功（PlannerAgent重试后）")
                         await client.post(
                             f"http://127.0.0.1:{mock_port}/configure_failures",
                             json={"failures": {"grant_access": failure_count}}
@@ -706,43 +727,38 @@ result = {
             except Exception:
                 await asyncio.sleep(0.5)
         
-        # 初始化 PlanModule
+        # 初始化 PlanModule（需要传入AgentRuntime和A2AClient以支持验证）
         db = MemoryDatabaseConnection()
-        plan_module = PlanModule(db.plan_repo, db.task_repo, db.listener_repo)
-        await plan_module.start()
         
-        # 设置 A2A 验证功能
+        # 创建AgentRuntime和A2AServer
+        from src.infrastructure.adk_integration import AgentRuntime
         from src.infrastructure.a2a_server import A2AServer
         from src.infrastructure.a2a_client import DefaultA2AClient
+        from src.infrastructure.mcp_client import MCPClient
         
+        # 初始化MCP Client
+        mcp_client = MCPClient(f"http://127.0.0.1:{mcp_port}")
+        
+        # 初始化AgentRuntime（用于创建BizAgent）
+        adk_integration = AgentRuntime(mcp_client)
+        
+        # 从config/apps加载所有BizAgent
+        agent_count = adk_integration.load_agents_from_config("config/apps")
+        print(f"AgentRuntime已加载 {agent_count} 个agents")
+        
+        # 初始化A2AServer
         a2a_server = A2AServer()
-        await a2a_server.register_agent({
-            "agent_id": "hr_agent",
-            "agent_name": "HR Agent",
-            "provider": "internal",
-            "version": "1.0.0",
-            "capabilities": ["query_profile"],
-            "endpoints": {"execute": "/agents/hr/execute"}
-        })
-        await a2a_server.register_agent({
-            "agent_id": "inventory_agent",
-            "agent_name": "Inventory Agent",
-            "provider": "internal",
-            "version": "1.0.0",
-            "capabilities": ["check_outbound_status"],
-            "endpoints": {"execute": "/agents/inv/execute"}
-        })
-        await a2a_server.register_agent({
-            "agent_id": "access_agent",
-            "agent_name": "Access Agent",
-            "provider": "internal",
-            "version": "1.0.0",
-            "capabilities": ["query_access"],
-            "endpoints": {"execute": "/agents/access/execute"}
-        })
+        a2a_client = DefaultA2AClient(a2a_server)
         
-        # 将A2A客户端注入PlanModule
-        plan_module.set_a2a_client(DefaultA2AClient(a2a_server))
+        # 创建PlanModule，传入所有依赖
+        plan_module = PlanModule(
+            db.plan_repo, 
+            db.task_repo, 
+            db.listener_repo,
+            adk_integration=adk_integration,
+            a2a_client=a2a_client
+        )
+        await plan_module.start()
         
         # 设置Planner的max_retry_count，确保重试1次后成功
         # 第1轮失败（m次调用），Planner重试1次，第2轮成功（第m+1次调用）
@@ -763,8 +779,12 @@ result = {
             # 设置员工上下文
             await self._setup_employee_context(plan_module, plan_instance)
             
+            # 启动计划实例的自我驱动执行
+            print("启动计划实例自我驱动执行...")
+            plan_instance.start()
+            
             # 轮询等待计划实例执行完成（done或error）
-            print(f"等待流程执行，grant_access 会失败 {m} 次，第{m+1}次Planner重试后成功...")
+            print(f"等待流程执行，grant_access 会失败 {failure_count} 次（ReactAgent用尽重试），然后Planner重试listener，第{failure_count+1}次成功...")
             plan_final_status = await self._wait_for_plan_instance_completion(plan_module, plan_instance.id, timeout_seconds=180, poll_interval_seconds=2.0)
             
             # 验证主任务最终成功（重试成功场景）
@@ -774,20 +794,57 @@ result = {
             assert plan_final_status == "done", f"Expected plan done, got {plan_final_status}"
             assert main_task.status == "Done", f"Expected main task Done, got {main_task.status}"
             
-            # 验证任务 005 的重试信息
+            # 验证所有子任务完成
+            task_002 = plan_instance.task_instances.get("002")
+            task_003 = plan_instance.task_instances.get("003")
             task_005 = plan_instance.task_instances.get("005")
-            print(f"任务 005 状态: {task_005.status}")
-            print(f"任务 005 重试信息: {task_005.context.get('retry_info', {})}")
+            task_006 = plan_instance.task_instances.get("006")
+            assert task_002.status == "Done", f"Task 002 should be Done, got {task_002.status}"
+            assert task_003.status == "Done", f"Task 003 should be Done, got {task_003.status}"
+            assert task_005.status == "Done", f"Task 005 should be Done, got {task_005.status}"
+            assert task_006.status == "Done", f"Task 006 should be Done, got {task_006.status}"
             
-            # 验证 Planner 记录了重试（如果有的话）
-            if plan_instance.id in plan_module.planner_agent.task_retry_records:
-                print(f"重试记录: {plan_module.planner_agent.task_retry_records[plan_instance.id]}")
+            print(f"任务 002 (HR): {task_002.status}, context: {task_002.context}")
+            print(f"任务 003 (申请电脑): {task_003.status}, context: {task_003.context}")
+            print(f"任务 005 (门禁-重试成功): {task_005.status}, context: {task_005.context}")
+            print(f"任务 006 (邮件): {task_006.status}, context: {task_006.context}")
+            
+            # 验证 Planner 记录了重试
+            assert plan_instance.id in plan_module.planner_agent.task_retry_records, "Should have retry records"
+            retry_records = plan_module.planner_agent.task_retry_records[plan_instance.id]
+            print(f"重试记录: {retry_records}")
+            # 应该有listener重试记录
+            assert any('listener_' in k for k in retry_records.keys()), "Should have listener retry record"
             
             # 验证 Planner 验证结果
             verification_results = main_task.context.get("verification_results")
             assert verification_results is not None, "Should have verification results"
+            print(f"验证结果: {verification_results}")
             
-            print("✅ 门禁失败后重试成功测试通过")
+            # 验证工具调用次数（通过mock_tool_result.log）
+            import json
+            with open("tests/.artifacts/mock_tool_result.log", "r") as f:
+                tool_calls = [json.loads(line) for line in f if line.strip()]
+            
+            # 统计每个工具的调用次数
+            tool_counts = {}
+            for call in tool_calls:
+                tool_name = call["tool"]
+                tool_counts[tool_name] = tool_counts.get(tool_name, 0) + 1
+            
+            print(f"\n工具调用统计: {tool_counts}")
+            
+            # 关键验证点
+            assert tool_counts.get("create_employee_profile") == 1, "create_employee_profile should be called once"
+            assert tool_counts.get("grant_access") == 4, f"grant_access should be called 4 times (3 fails + 1 success), got {tool_counts.get('grant_access')}"
+            assert tool_counts.get("apply_computer") == 1, "apply_computer should be called once"
+            assert tool_counts.get("outbound") == 1, "outbound should be called once"
+            assert tool_counts.get("send_email") == 1, "send_email should be called once"
+            assert tool_counts.get("query_profile") == 1, "query_profile should be called once (verification)"
+            assert tool_counts.get("query_access") == 1, "query_access should be called once (verification)"
+            assert tool_counts.get("check_outbound_status") == 1, "check_outbound_status should be called once (verification)"
+            
+            print("✅ 门禁失败后重试成功测试通过 - 所有工具正确调用，流程完整")
             
         finally:
             # 清理
