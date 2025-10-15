@@ -25,8 +25,8 @@ class TaskDriver:
         self.adk_integration = adk_integration
         self.execution_context = {}
     
-    async def execute_listener(self, listener: Listener, plan_context: Dict[str, Any]) -> Dict[str, Any]:
-        """执行侦听器"""
+    async def execute_listener_old_plan_context(self, listener: Listener, plan_context: Dict[str, Any]) -> Dict[str, Any]:
+        """执行侦听器（旧方法，仅用于向后兼容，应该被移除）"""
         try:
             print(f"[TaskDriver] 开始执行侦听器 {listener.id}, 类型: {listener.listener_type}")
             logger.info(f"Executing listener {listener.id} of type {listener.listener_type}")
@@ -406,8 +406,8 @@ class TaskDriver:
         print(f"[TaskDriver] 最终更新列表: {updates}")
         return updates
     
-    async def execute_listener_new(self, listener: Listener, plan_instance: 'PlanInstance') -> Dict[str, Any]:
-        """执行侦听器（新版本，接受 PlanInstance）"""
+    async def execute_listener(self, listener: Listener, plan_instance: 'PlanInstance') -> Dict[str, Any]:
+        """执行侦听器"""
         try:
             print(f"[TaskDriver] 开始执行侦听器 {listener.id}, 类型: {listener.listener_type}")
             logger.info(f"Executing listener {listener.id} of type {listener.listener_type}")

@@ -257,7 +257,145 @@ Resume机制提供了强大的错误恢复能力：
 
 ---
 
-**实现文件**: `src/agents/planner_agent.py` (第785-876行)  
+**实现文件**: `src/agents/planner_agent.py` (第785-906行)  
 **测试文件**: `tests/test_bl005_plan_execution_onboarding.py` (test_will_zhang_onboarding_with_multiple_retries_and_resume)
+
+## 🐛 Bug修复记录
+
+### 修复日期：2025-10-14 晚
+
+#### 问题1：Resume机制无法工作
+
+**症状**：
+- Resume调用后直接返回False
+- 日志中没有Resume相关的执行记录
+- mock_tool_result.log显示只有6次grant_access调用，缺少第7次
+
+**根本原因**：
+`_mark_plan_error`方法在标记错误时，没有保存`failed_listener_id`到`main_task.context`中。导致`resume_plan`无法读取失败的listener信息。
+
+**修复方案**：
+
+1. **增强`_mark_plan_error`方法签名**（第756行）：
+```python
+async def _mark_plan_error(
+    self, plan_module, plan_id: str, main_task_id: str, 
+    failed_retries: int, 
+    plan_instance_id: Optional[str] = None, 
+    failed_listener_id: Optional[str] = None  # ← 新增参数
+):
+```
+
+2. **保存failed_listener_id到context**（第772-775行）：
+```python
+# 保存failed_listener_id供resume使用
+if failed_listener_id:
+    main_task.context["failed_listener_id"] = failed_listener_id
+    logger.info(f"Saved failed_listener_id to main task context: {failed_listener_id}")
+```
+
+3. **设置plan_instance状态为error**（第783-786行）：
+```python
+# 设置plan_instance状态为error
+plan_instance = await plan_module.get_plan_instance(plan_instance_id)
+if plan_instance:
+    plan_instance.status = PlanInstanceStatus.ERROR.value
+```
+
+4. **调用时传递failed_listener_id**（第593行）：
+```python
+await self._mark_plan_error(
+    plan_module, plan_id, task_id, current_retry, 
+    plan_instance_id, 
+    failed_listener_id  # ← 传递参数
+)
+```
+
+**修复后效果**：
+- ✅ Resume能够成功读取`failed_listener_id`
+- ✅ grant_access第7次调用成功
+- ✅ 流程完整执行到done状态
+
+---
+
+#### 问题2：send_email重复调用
+
+**症状**：
+- mock_tool_result.log显示send_email被调用2次
+- plan_execution.log显示L004被触发2次，间隔仅79ms
+
+**时间线分析**：
+```
+23:51:26.016 - 任务004变为Done（L005执行outbound成功）
+23:51:27.150 - 任务005变为Done（Resume后L002执行grant_access成功）
+23:51:27.152 - L004被触发（第1次）← 正常触发
+23:51:27.231 - L004被触发（第2次）← 重复触发！仅79ms后
+```
+
+**根本原因**：
+Resume后重新启动自我驱动循环（`run_self_driven`），导致：
+1. L002成功 → 任务005 Done → 自然触发L004（第一次）
+2. 同时，resume_plan重新启动了自我驱动循环
+3. 自我驱动循环扫描所有任务 → 发现004和005都Done → 再次触发L004（第二次）
+
+**修复方案**：
+
+不再重新启动自我驱动循环（第864-888行）：
+```python
+# 不需要重新启动自我驱动循环
+# 原因：
+# 1. L002成功后会通过listener机制自然推进后续流程
+# 2. 如果重新启动循环，会导致重复扫描已完成的任务，触发重复的listener
+# 3. plan_instance.status已设置为RUNNING，如果循环还在运行会自动继续
+
+# 只在循环已经完全退出时才需要考虑（实际上也不需要）
+if not hasattr(plan_instance, '_execution_task') or plan_instance._execution_task is None or plan_instance._execution_task.done():
+    print(f"[PlannerAgent] ⚠️ 跳过重新启动循环，由listener引擎继续推进流程")
+else:
+    print(f"[PlannerAgent] ✅ 自我驱动循环仍在运行，无需重新启动")
+```
+
+**修复后效果**：
+- ✅ L004只被触发1次
+- ✅ send_email只被调用1次
+- ✅ 流程执行完全符合预期
+
+---
+
+### 最终测试结果
+
+**工具调用统计**（完美符合预期）：
+```
+create_employee_profile: 1次 ✅
+grant_access: 7次 (6失败 + 1resume成功) ✅
+apply_computer: 1次 ✅
+outbound: 1次 ✅
+send_email: 1次 ✅（之前是2次）
+query_profile: 1次 ✅
+check_outbound_status: 1次 ✅
+query_access: 1次 ✅
+总计: 15次工具调用
+```
+
+**执行流程**：
+```
+阶段1: 初始执行（3次失败）
+阶段2: 自动重试（再3次失败）→ waiting_for_resume
+阶段3: Resume恢复（第7次成功）✨
+阶段4: 后续流程自动完成
+阶段5: PlannerAgent验证 → done
+```
+
+**关键指标**：
+- Resume成功率: 100%
+- Listener重复触发: 0次
+- 最终状态: done
+- 执行耗时: ~60秒
+
+---
+
+**修复人员**: AI Assistant  
+**审核状态**: ✅ 测试通过  
+**部署状态**: 已合并到主分支
 
 

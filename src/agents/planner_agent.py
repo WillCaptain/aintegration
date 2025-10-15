@@ -269,15 +269,13 @@ class PlannerAgent:
                         "task_updates_count": len(result.get('task_updates', []))
                     })
                 else:
-                    print(f"[Planner] ⚠️ plan_instance not found, fallback to old way")
-                    # 回退到老方式
-                    await plan_module.listener_engine._execute_triggered_listeners([listener], plan_context)
-                    execution_logger.planner_decision(plan_id, "RETRY_LISTENER_COMPLETED", listener_id, {})
+                    print(f"[Planner] ❌ plan_instance not found")
+                    execution_logger.planner_decision(plan_id, "RETRY_LISTENER_ERROR", listener_id, {"error": "plan_instance not found"})
+                    return
             else:
-                print(f"[Planner] ⚠️ No plan_instance_id, using old way")
-                # 没有plan_instance_id，使用老方式
-                await plan_module.listener_engine._execute_triggered_listeners([listener], plan_context)
-                execution_logger.planner_decision(plan_id, "RETRY_LISTENER_COMPLETED", listener_id, {})
+                print(f"[Planner] ❌ No plan_instance_id")
+                execution_logger.planner_decision(plan_id, "RETRY_LISTENER_ERROR", listener_id, {"error": "plan_instance_id required"})
+                return
             
             logger.info(f"Retried listener {listener_id} successfully")
             print(f"[Planner] ✅ 侦听器重试成功: {listener_id}")
@@ -594,63 +592,15 @@ class PlannerAgent:
                 # 设置plan状态为Error
                 await plan_module.plan_repo.update(plan_id, {"status": "Error"})
                 return
-
-        # 初始化重试记录
-        if log_key not in self.task_retry_records:
-            self.task_retry_records[log_key] = {}
         
-        # 获取当前重试次数
-        current_retry = self.task_retry_records[log_key].get(task_id, 0)
-        
-        # 从 LLM 获取重试决策（可以根据错误类型智能决定重试次数）
-        retry_decision = await self._decide_retry_strategy(plan_module, task_id, current_retry, plan_context)
-        max_retries = retry_decision.get("max_retries", self.max_retry_count)
-        
-        if current_retry < max_retries:
-            # 还有重试机会，重新设置任务状态触发重试
-            current_retry += 1
-            self.task_retry_records[log_key][task_id] = current_retry
-            
-            logger.info(f"Retrying task {task_id}: attempt {current_retry}/{max_retries}")
-            
-            # 记录Planner重试决策
-            execution_logger.planner_decision(
-                plan_id, "RETRY_TASK", task_id,
-                {"current_retry": current_retry, "max_retries": max_retries, "remaining": max_retries - current_retry}
-            )
-            
-            # 重置任务状态为 NotStarted，让侦听器重新触发
-            await self._retry_task(plan_module, task_id, current_retry, plan_instance_id)
-            
-        else:
-            # 超过重试次数
-            logger.warning(f"Task {task_id} exceeded max retries ({max_retries}), no more retries")
-            
-            # 记录超限决策
-            execution_logger.planner_decision(
-                plan_id, "MAX_RETRIES_EXCEEDED", task_id,
-                {"current_retry": current_retry, "max_retries": max_retries, "is_main_task": is_main_task}
-            )
-            
-            if is_main_task:
-                # 如果是主任务，保持 Error 状态，等待 resume
-                logger.info(f"Main task {task_id} in Error state, waiting for resume")
-                await self._mark_plan_error(plan_module, plan_id, task_id, current_retry)
-            else:
-                # 如果是子任务，将主任务也设置为 Error
-                main_task_id = plan_context.get("main_task_id")
-                if main_task_id:
-                    logger.info(f"Setting main task {main_task_id} to Error due to subtask {task_id} failure")
-                    
-                    # 记录主任务Error决策
-                    execution_logger.planner_decision(
-                        plan_id, "SET_MAIN_TASK_ERROR", main_task_id,
-                        {"reason": f"subtask_{task_id}_exceeded_retries", "subtask_retries": current_retry}
-                    )
-                    
-                    # 调用 _mark_plan_error 来正确记录 error_info（内部已更新数据库）
-                    await self._mark_plan_error(plan_module, plan_id, main_task_id, current_retry)
-                    # 不要触发状态变化事件，避免递归触发Planner自己的重试逻辑
+        # 注意：以下代码是旧的任务级别重试机制，已被listener级别重试机制取代
+        # 保留此代码作为向后兼容，但在当前设计中不应该被执行
+        # 因为所有listener失败都会设置主任务001为Error，不会有非主任务的Error
+        logger.warning(f"Non-main task {task_id} error encountered (should not happen in current design)")
+        logger.warning(f"All listener failures should set main task to Error, not subtask {task_id}")
+        # 直接将主任务设置为Error，触发listener重试机制
+        main_task_id = plan_context.get("main_task_id", "001")
+        await self._mark_plan_error(plan_module, plan_id, main_task_id, 0, plan_instance_id)
     
     async def _decide_retry_strategy(self, plan_module, task_id: str, current_retry: int, plan_context: Dict[str, Any]) -> Dict[str, Any]:
         """决定重试策略（可以通过 LLM 智能决策）"""
@@ -661,98 +611,9 @@ class PlannerAgent:
             "strategy": "immediate"  # immediate | exponential_backoff
         }
     
-    async def _retry_task(self, plan_module, task_id: str, retry_attempt: int, plan_instance_id: Optional[str] = None):
-        """重试任务：重置任务状态"""
-        # 获取task instance
-        task = None
-        if plan_instance_id:
-            plan_instance = await plan_module.get_plan_instance(plan_instance_id)
-            if plan_instance:
-                task = plan_instance.get_task_instance(task_id)
-        
-        if not task:
-            logger.error(f"Task {task_id} not found for retry")
-            return
-        
-        old_status = task.status
-        plan_id = task.plan_id
-        
-        # 记录重试信息到任务上下文
-        if "retry_info" not in task.context:
-            task.context["retry_info"] = {}
-        task.context["retry_info"]["attempt"] = retry_attempt
-        task.context["retry_info"]["last_retry_time"] = json.dumps({"time": "now"})  # 简化时间记录
-        
-        if plan_instance_id:
-            # 更新任务实例
-            await plan_module.update_task_instance_status(plan_instance_id, task_id, "NotStarted", task.context)
-        else:
-            # 回退到传统更新
-            await plan_module.task_repo.update(task_id, {
-                "status": "NotStarted",
-                "context": task.context
-            })
-        
-        # 触发状态变化事件，让侦听器扫描
-        await plan_module.listener_engine.trigger_task_status_change(
-            task_id, old_status, "NotStarted", plan_id, plan_instance_id
-        )
-        
-        logger.info(f"Task {task_id} reset to NotStarted for retry attempt {retry_attempt}")
+    # _retry_task方法已移除 - 使用listener级别的重试机制(_retry_listener_by_id)代替
 
-        # 同步：尝试重新触发上游侦听器（让驱动该任务的侦听器再次评估）
-        try:
-            await self._retrigger_upstream_listener(plan_module, plan_id, task_id, plan_instance_id)
-        except Exception as e:
-            logger.warning(f"Failed to retrigger upstream for task {task_id}: {e}")
-
-    async def _retrigger_upstream_listener(self, plan_module, plan_id: str, failed_task_id: str, plan_instance_id: Optional[str] = None) -> None:
-        """直接重放上游侦听器一次（而非仅投递状态事件），确保重试链路被真正执行。"""
-        logger.info(f"Retriggering upstream listener for task {failed_task_id}")
-        execution_logger.planner_decision(plan_id, "RETRIGGER_UPSTREAM", failed_task_id, {})
-        
-        listeners = await plan_module.listener_manager.listener_repo.get_by_plan_id(plan_id)
-        # 找出以 failed_task_id 为目标输出的侦听器（成功或失败输出）
-        upstream_listeners = []
-        for ls in listeners:
-            try:
-                so = getattr(ls, "success_output", None) or {}
-                fo = getattr(ls, "failure_output", None) or {}
-                if (so.get("task_id") == failed_task_id) or (fo.get("task_id") == failed_task_id):
-                    upstream_listeners.append(ls)
-                    logger.info(f"Found upstream listener {ls.id} for task {failed_task_id}")
-            except Exception as e:
-                logger.warning(f"Error checking listener {getattr(ls, 'id', '?')}: {e}")
-                continue
-        if not upstream_listeners:
-            logger.info(f"No upstream listeners found for failed task {failed_task_id}")
-            execution_logger.planner_decision(plan_id, "NO_UPSTREAM_FOUND", failed_task_id, {})
-            return
-        # 获取最新计划上下文
-        plan_context = await plan_module.listener_engine._get_plan_context(plan_id)
-        # 如果存在 plan_instance_id，添加到上下文中
-        if plan_instance_id:
-            plan_context["plan_instance_id"] = plan_instance_id
-        # 逐个执行这些上游侦听器，并应用更新
-        for ls in upstream_listeners:
-            try:
-                execution_logger.planner_decision(plan_id, "EXECUTING_UPSTREAM", failed_task_id, {"listener_id": ls.id, "plan_instance_id": plan_instance_id})
-                result = await plan_module.listener_engine.task_driver.execute_listener(ls, plan_context)
-                updates = plan_module.listener_engine.task_driver.determine_task_updates(ls, result)
-                execution_logger.planner_decision(plan_id, "UPSTREAM_RESULT", failed_task_id, {
-                    "listener_id": ls.id, 
-                    "success": result.get("success", False),
-                    "updates_count": len(updates)
-                })
-                for upd in updates:
-                    await plan_module.listener_engine._apply_task_update(upd)
-                logger.info(f"Replayed upstream listener {ls.id} to drive task {failed_task_id}")
-            except Exception as e:
-                logger.warning(f"Failed to replay upstream listener {getattr(ls,'id','?')}: {e}")
-                execution_logger.planner_decision(plan_id, "UPSTREAM_ERROR", failed_task_id, {
-                    "listener_id": getattr(ls, 'id', '?'),
-                    "error": str(e)
-                })
+    # _retrigger_upstream_listener方法已移除 - 不再使用任务级别的重试机制
     
     async def _mark_plan_error(self, plan_module, plan_id: str, main_task_id: str, failed_retries: int, plan_instance_id: Optional[str] = None, failed_listener_id: Optional[str] = None):
         """标记计划为错误状态"""

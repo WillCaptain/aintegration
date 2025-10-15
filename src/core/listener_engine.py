@@ -163,8 +163,8 @@ class ListenerEngine:
     async def execute_listener(self, listener: Listener, plan_instance: 'PlanInstance') -> Dict[str, Any]:
         """执行侦听器"""
         try:
-            # 使用 TaskDriver 执行侦听器（新版本）
-            result = await self.task_driver.execute_listener_new(listener, plan_instance)
+            # 使用 TaskDriver 执行侦听器
+            result = await self.task_driver.execute_listener(listener, plan_instance)
             return result
         except Exception as e:
             logger.error(f"Error executing listener {listener.listener_id}: {e}")
