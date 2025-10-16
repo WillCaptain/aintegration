@@ -1,578 +1,332 @@
-# AIntegration 系统架构设计文档
+# AIntegration 系统架构概览
 
-## 1. 系统架构概述
-
-### 1.1 整体架构图
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        用户请求层                                │
-│  "张三入职" → Planner模块 → 查找/创建Plan → 启动执行            │
-└─────────────────────────────────────────────────────────────────┘
-                                ↓
-┌─────────────────────────────────────────────────────────────────┐
-│                        核心执行层                                │
-│ ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐│
-│ │   计划模块       │    │  任务侦听模块    │    │  Atom Agent模块 ││
-│ │ (Plan Module)   │    │(Task Listener) │    │ (Atom Agents)   ││
-│ └─────────────────┘    └─────────────────┘    └─────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
-                                ↓
-┌─────────────────────────────────────────────────────────────────┐
-│                        基础设施层                                │
-│ ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐│
-│ │   MCP Server    │    │   A2A Server    │    │   ADK Framework ││
-│ │  (工具注册)      │    │ (Agent注册发现) │    │  (智能体框架)   ││
-│ └─────────────────┘    └─────────────────┘    └─────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
-                                ↓
-┌─────────────────────────────────────────────────────────────────┐
-│                        数据存储层                                │
-│ ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐│
-│ │   Plan DB       │    │   Task DB       │    │   Execution DB  ││
-│ │  (计划持久化)    │    │ (任务持久化)    │    │ (执行记录)      ││
-│ └─────────────────┘    └─────────────────┘    └─────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### 1.2 模块交互流程图
-```
-用户请求: "张三入职"
-    ↓
-┌─────────────────────────────────────────────────────────────────┐
-│                        Planner模块                              │
-│ 1. 理解意图 → 2. 搜索匹配Plan → 3. 创建新Plan → 4. 启动执行    │
-└─────────────────────────────────────────────────────────────────┘
-    ↓ (启动Plan执行)
-┌─────────────────────────────────────────────────────────────────┐
-│                        任务侦听模块                              │
-│ 1. 接收Agent输出 → 2. 更新任务状态 → 3. 触发侦听器 → 4. 启动Agent│
-└─────────────────────────────────────────────────────────────────┘
-    ↓ (Agent执行请求)
-┌─────────────────────────────────────────────────────────────────┐
-│                        Atom Agent模块                           │
-│ 1. 接收执行指令 → 2. 调用MCP工具 → 3. 执行API调用 → 4. 返回结果 │
-└─────────────────────────────────────────────────────────────────┘
-    ↓ (返回执行结果)
-┌─────────────────────────────────────────────────────────────────┐
-│                        任务侦听模块                              │
-│ 5. 处理Agent结果 → 6. 更新任务状态 → 7. 触发下一轮侦听循环      │
-└─────────────────────────────────────────────────────────────────┘
-    ↓ (循环执行直到Main Task完成)
-┌─────────────────────────────────────────────────────────────────┐
-│                        执行完成                                  │
-│ 记录执行日志 → 更新执行状态 → 返回结果给用户                    │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### 1.3 核心模块职责
-- **Planner模块**：智能规划，处理用户请求，创建和调整执行计划
-- **任务侦听模块**：事件驱动的任务状态管理和Agent调度
-- **计划模块**：Plan和Task的持久化管理
-- **Atom Agent模块**：具体业务逻辑执行，API调用
-- **基础设施模块**：提供Agent框架、工具注册、服务发现等支持
-
-## 2. 任务侦听模块 (Task Listener Module)
-
-### 2.1 模块职责
-- **任务状态管理**：接收Agent输出，更新任务状态和上下文
-- **侦听器调度**：状态变化时触发相关侦听器
-- **条件检查**：评估侦听器的触发条件
-- **Agent启动**：条件满足时启动对应的Agent
-
-### 2.2 核心组件
-
-#### 2.2.1 任务状态管理器 (Task State Manager)
-```python
-class TaskStateManager:
-    def update_task_status(self, task_id: str, status: str, context: dict):
-        """更新任务状态和上下文"""
-        # 1. 更新数据库中的任务状态
-        # 2. 触发状态变化事件
-        # 3. 通知侦听器调度器
-        pass
-    
-    def get_task_context(self, task_id: str) -> dict:
-        """获取任务上下文"""
-        pass
-    
-    def batch_update_tasks(self, updates: List[TaskUpdate]):
-        """批量更新多个任务状态"""
-        pass
-```
-
-#### 2.2.2 侦听器调度器 (Listener Scheduler)
-```python
-class ListenerScheduler:
-    def on_task_status_changed(self, task_id: str, old_status: str, new_status: str):
-        """任务状态变化事件处理"""
-        # 1. 查找监听该任务状态变化的侦听器
-        # 2. 检查每个侦听器的触发条件
-        # 3. 条件满足时启动对应的Agent
-        pass
-    
-    def evaluate_condition(self, listener: Listener, context: dict) -> bool:
-        """评估侦听器触发条件"""
-        # 支持复杂的多任务状态组合条件
-        pass
-    
-    def trigger_agent(self, listener: Listener, context: dict):
-        """触发Agent执行"""
-        # 1. 构建Agent输入上下文
-        # 2. 调用Agent执行
-        # 3. 处理Agent返回结果
-        pass
-```
-
-### 2.3 执行流程
-```
-Agent输出 → 任务状态管理器 → 更新任务状态 → 触发侦听器调度器
-    ↓
-侦听器调度器 → 查找相关侦听器 → 检查触发条件 → 启动Agent
-    ↓
-Agent执行 → 返回结果 → 循环执行
-```
-
-## 3. 计划模块 (Plan Module)
-
-### 3.1 模块职责
-- **Plan管理**：Plan的创建、编辑、持久化
-- **Task管理**：Task的定义、状态跟踪、上下文管理
-- **侦听器管理**：侦听器配置的存储和查询
-- **查询接口**：提供丰富的查询接口支持Agent获取上下文
-
-### 3.2 核心组件
-
-#### 3.2.1 Plan管理器 (Plan Manager)
-```python
-class PlanManager:
-    def create_plan(self, plan_config: dict) -> str:
-        """创建新的执行计划"""
-        pass
-    
-    def update_plan(self, plan_id: str, updates: dict):
-        """更新计划配置"""
-        pass
-    
-    def get_plan(self, plan_id: str) -> Plan:
-        """获取计划详情"""
-        pass
-    
-    def search_plans(self, criteria: dict) -> List[Plan]:
-        """搜索匹配的计划"""
-        pass
-```
-
-#### 3.2.2 Task管理器 (Task Manager)
-```python
-class TaskManager:
-    def create_task(self, task_config: dict) -> str:
-        """创建任务"""
-        pass
-    
-    def update_task(self, task_id: str, updates: dict):
-        """更新任务"""
-        pass
-    
-    def get_task(self, task_id: str) -> Task:
-        """获取单个任务"""
-        pass
-    
-    def get_plan_tasks(self, plan_id: str) -> List[Task]:
-        """获取计划的所有任务"""
-        pass
-    
-    def get_task_context(self, task_id: str) -> dict:
-        """获取任务上下文"""
-        pass
-```
-
-#### 3.2.3 侦听器管理器 (Listener Manager)
-```python
-class ListenerManager:
-    def create_listener(self, listener_config: dict) -> str:
-        """创建侦听器"""
-        pass
-    
-    def get_listeners_by_task(self, task_id: str) -> List[Listener]:
-        """获取监听特定任务的侦听器"""
-        pass
-    
-    def get_listeners_by_trigger(self, task_id: str, status: str) -> List[Listener]:
-        """获取特定触发条件的侦听器"""
-        pass
-```
-
-### 3.3 Few-shot学习支持
-```json
-{
-  "few_shot_examples": [
-    {
-      "scenario": "新员工入职",
-      "plan_template": {
-        "tasks": [...],
-        "listeners": [...]
-      },
-      "modification_guide": "如何根据具体需求修改计划"
-    }
-  ]
-}
-```
-
-## 4. Atom Agent模块
-
-### 4.1 模块职责
-- **API工具注册**：将IT系统API注册到MCP Server
-- **Agent实现**：基于ReAct模式的智能体
-- **系统隔离**：每个Agent只访问授权的API
-- **Agent注册**：向A2A Server注册Agent能力
-
-### 4.2 技术选型
-
-#### 4.2.1 Agent框架选择
-**推荐：Google ADK (Agent Development Kit)**
-- ✅ 完整的ReAct实现
-- ✅ 工具调用标准化
-- ✅ 上下文管理完善
-- ✅ 与MCP协议兼容
-- ✅ 企业级支持和文档
-
-**备选方案：**
-- LangChain Agent
-- AutoGen
-- CrewAI
-
-#### 4.2.2 Agent实现架构
-```python
-class BizAgent:
-    def __init__(self, agent_config: dict):
-        self.agent_id = agent_config['agent_id']
-        self.system_context = agent_config['system_context']
-        self.allowed_tools = agent_config['allowed_tools']
-        self.mcp_client = MCPClient()
-        self.a2a_client = A2AClient()
-    
-    def execute(self, prompt: str, context: dict) -> dict:
-        """执行Agent任务"""
-        # 1. 构建系统上下文
-        # 2. 调用大模型进行推理
-        # 3. 执行工具调用
-        # 4. 返回执行结果
-        pass
-    
-    def register_tools(self):
-        """注册允许的工具"""
-        for tool in self.allowed_tools:
-            self.mcp_client.register_tool(tool)
-    
-    def register_to_a2a(self):
-        """向A2A Server注册"""
-        agent_card = self.build_agent_card()
-        self.a2a_client.register_agent(agent_card)
-```
-
-### 4.3 Agent配置示例
-```json
-{
-  "agent_id": "hr_agent_v1",
-  "agent_name": "HR系统代理",
-  "system_context": "你是一个HR系统的专业代理，负责处理员工相关的所有操作",
-  "allowed_tools": [
-    "create_employee",
-    "update_employee",
-    "get_employee_info"
-  ],
-  "mcp_tools": [
-    {
-      "name": "create_employee",
-      "endpoint": "https://hr-api.company.com/employees",
-      "method": "POST",
-      "schema": {...}
-    }
-  ]
-}
-```
-
-## 5. Planner模块
-
-### 5.1 模块职责
-- **请求处理**：接收用户请求，理解意图
-- **计划查找**：搜索现有的匹配计划
-- **计划创建**：基于Few-shot学习创建新计划
-- **执行监控**：监控计划执行，处理异常
-- **计划调整**：根据执行情况动态调整计划
-
-### 5.2 核心组件
-
-#### 5.2.1 请求处理器 (Request Handler)
-```python
-class RequestHandler:
-    def process_request(self, user_request: str) -> ExecutionPlan:
-        """处理用户请求"""
-        # 1. 理解用户意图
-        # 2. 搜索匹配的计划
-        # 3. 如果找到，直接执行
-        # 4. 如果没找到，创建新计划
-        pass
-    
-    def understand_intent(self, request: str) -> dict:
-        """理解用户意图"""
-        pass
-    
-    def search_matching_plans(self, intent: dict) -> List[Plan]:
-        """搜索匹配的计划"""
-        pass
-```
-
-#### 5.2.2 计划生成器 (Plan Generator)
-```python
-class PlanGenerator:
-    def create_plan_from_intent(self, intent: dict) -> Plan:
-        """根据意图创建计划"""
-        # 1. 使用Few-shot学习
-        # 2. 参考现有计划模板
-        # 3. 生成任务和侦听器配置
-        pass
-    
-    def adapt_plan_template(self, template: Plan, requirements: dict) -> Plan:
-        """适配计划模板"""
-        pass
-```
-
-#### 5.2.3 执行监控器 (Execution Monitor)
-```python
-class ExecutionMonitor:
-    def monitor_execution(self, execution_id: str):
-        """监控计划执行"""
-        # 1. 跟踪任务执行状态
-        # 2. 检测异常情况
-        # 3. 触发计划调整
-        pass
-    
-    def handle_execution_error(self, execution_id: str, error: Exception):
-        """处理执行错误"""
-        # 1. 分析错误原因
-        # 2. 决定是否需要重新规划
-        # 3. 启动ResiliencePlan
-        pass
-```
-
-### 5.3 执行记录和回溯
-```json
-{
-  "execution_id": "exec_001",
-  "user_request": "张三入职",
-  "plan_id": "plan_101",
-  "start_time": "2024-01-01T10:00:00Z",
-  "status": "running",
-  "execution_log": [
-    {
-      "timestamp": "2024-01-01T10:00:00Z",
-      "event": "plan_started",
-      "details": {...}
-    },
-    {
-      "timestamp": "2024-01-01T10:01:00Z",
-      "event": "task_status_changed",
-      "task_id": "001",
-      "old_status": "NotStarted",
-      "new_status": "Running"
-    }
-  ]
-}
-```
-
-## 6. 基础设施模块
-
-### 6.1 MCP Server
-**职责**：工具注册和调用管理
-```yaml
-mcp_server:
-  version: "1.0"
-  features:
-    - tool_registration
-    - tool_discovery
-    - tool_execution
-    - authentication
-  protocols:
-    - http
-    - websocket
-    - grpc
-```
-
-### 6.2 A2A Server
-**职责**：Agent注册发现和通信
-```yaml
-a2a_server:
-  version: "1.0"
-  features:
-    - agent_registration
-    - agent_discovery
-    - agent_communication
-    - health_monitoring
-  protocols:
-    - a2a_protocol_v1
-    - http_rest
-    - websocket
-```
-
-### 6.3 Google ADK集成
-```python
-class AgentRuntime:
-    def __init__(self):
-        self.adk_client = GoogleADKClient()
-    
-    def create_react_agent(self, config: dict) -> ReactAgent:
-        """创建ReAct Agent"""
-        return self.adk_client.create_agent(
-            system_prompt=config['system_prompt'],
-            tools=config['tools'],
-            model=config['model']
-        )
-```
-
-## 7. 数据存储设计
-
-### 7.1 数据库架构
-```sql
--- 计划表
-CREATE TABLE plans (
-    id VARCHAR(255) PRIMARY KEY,
-    name VARCHAR(255),
-    description TEXT,
-    config JSON,
-    created_at TIMESTAMP,
-    updated_at TIMESTAMP
-);
-
--- 任务表
-CREATE TABLE tasks (
-    id VARCHAR(255) PRIMARY KEY,
-    plan_id VARCHAR(255),
-    name VARCHAR(255),
-    prompt TEXT,
-    status VARCHAR(50),
-    context JSON,
-    created_at TIMESTAMP,
-    updated_at TIMESTAMP
-);
-
--- 侦听器表
-CREATE TABLE listeners (
-    id VARCHAR(255) PRIMARY KEY,
-    plan_id VARCHAR(255),
-    trigger_task_id VARCHAR(255),
-    trigger_condition VARCHAR(500),
-    action_condition VARCHAR(500),
-    agent_id VARCHAR(255),
-    action_prompt TEXT,
-    success_output JSON,
-    failure_output JSON
-);
-
--- 执行记录表
-CREATE TABLE executions (
-    id VARCHAR(255) PRIMARY KEY,
-    user_request TEXT,
-    plan_id VARCHAR(255),
-    status VARCHAR(50),
-    start_time TIMESTAMP,
-    end_time TIMESTAMP,
-    execution_log JSON
-);
-```
-
-## 8. 部署架构
-
-### 8.1 微服务部署
-```
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│   Planner       │  │  Task Listener  │  │  Plan Module    │
-│   Service       │  │  Service        │  │  Service        │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│   Atom Agent    │  │   MCP Server    │  │   A2A Server    │
-│   Service       │  │   Service       │  │   Service       │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
-```
-
-### 8.2 容器化部署
-```yaml
-# docker-compose.yml
-version: '3.8'
-services:
-  planner-service:
-    image: aintegration/planner:latest
-    ports:
-      - "8001:8000"
-  
-  task-listener-service:
-    image: aintegration/task-listener:latest
-    ports:
-      - "8002:8000"
-  
-  plan-module-service:
-    image: aintegration/plan-module:latest
-    ports:
-      - "8003:8000"
-  
-  mcp-server:
-    image: aintegration/mcp-server:latest
-    ports:
-      - "8004:8000"
-  
-  a2a-server:
-    image: aintegration/a2a-server:latest
-    ports:
-      - "8005:8000"
-```
-
-## 9. 技术选型详细说明
-
-### 9.1 Google ADK vs 其他Agent框架对比
-
-| 框架 | 优势 | 劣势 | 适用场景 |
-|------|------|------|----------|
-| **Google ADK** | ✅ 完整的ReAct实现<br>✅ 企业级支持<br>✅ 与MCP兼容<br>✅ 文档完善 | ❌ 相对较新<br>❌ 社区较小 | **推荐**：企业级应用 |
-| **LangChain** | ✅ 社区活跃<br>✅ 生态丰富<br>✅ 文档详细 | ❌ 性能开销大<br>❌ 版本变化快 | 原型开发 |
-| **AutoGen** | ✅ 多Agent协作<br>✅ 对话式交互 | ❌ 复杂度过高<br>❌ 学习曲线陡峭 | 复杂协作场景 |
-| **CrewAI** | ✅ 角色分工明确<br>✅ 易于理解 | ❌ 功能相对简单<br>❌ 扩展性有限 | 简单任务编排 |
-
-### 9.2 MCP Server技术栈
-```yaml
-mcp_implementation:
-  language: "Python/Node.js"
-  framework: "FastAPI/Express.js"
-  protocol: "HTTP/WebSocket"
-  authentication: "JWT/OAuth2"
-  database: "PostgreSQL/MongoDB"
-  caching: "Redis"
-  monitoring: "Prometheus/Grafana"
-```
-
-### 9.3 A2A Server技术栈
-```yaml
-a2a_implementation:
-  language: "Python"
-  framework: "FastAPI"
-  protocol: "A2A Protocol v1"
-  service_discovery: "Consul/etcd"
-  load_balancer: "HAProxy/Nginx"
-  message_queue: "RabbitMQ/Kafka"
-```
-
-## 10. 监控和运维
-
-### 10.1 关键指标
-- **执行成功率**：计划执行成功的比例
-- **平均执行时间**：从开始到完成的时间
-- **Agent响应时间**：Agent执行的平均时间
-- **错误率**：执行过程中出现的错误比例
-
-### 10.2 日志和追踪
-- **结构化日志**：使用JSON格式记录所有关键事件
-- **分布式追踪**：跟踪请求在整个系统中的执行路径
-- **性能监控**：监控各个模块的性能指标
+**版本**: v2.0  
+**日期**: 2025-10-15  
+**项目**: AI员工即服务平台
 
 ---
 
-*此文档为AIntegration系统的详细架构设计，涵盖了所有核心模块的设计和实现细节。*
+## 🎯 系统概述
+
+AIntegration是一个企业级AI员工即服务平台，通过AI Agent技术实现复杂业务流程的自动化执行，支持人机交互、智能任务分配和全面的系统管理。
+
+### 核心特性
+- **AI Agent执行引擎**: 基于ReAct和Reflex模式的智能代理
+- **人机交互机制**: 参数暂停与继续，智能组件生成
+- **任务分配系统**: TODO自动分配和跟踪
+- **企业级管理**: 用户、角色、配置、监控管理
+- **多租户支持**: 支持多企业、多部门隔离
+
+---
+
+## 🏗️ 整体架构
+
+### 系统分层架构
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        AIntegration 完整架构                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌──────────────┐ │
+│  │   客户端应用     │    │   管理后台       │    │  移动端App   │ │
+│  │  Web Client     │    │  Admin Panel    │    │  Mobile App  │ │
+│  └─────────────────┘    └─────────────────┘    └──────────────┘ │
+│           │                       │                       │      │
+│           └───────────────────────┼───────────────────────┘      │
+│                                   │                              │
+├─────────────────────────────────────────────────────────────────┤
+│                    API Gateway & Authentication                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌──────────────┐ │
+│  │   业务API       │    │   管理API       │    │  TODO API    │ │
+│  │ Business API    │    │  Admin API      │    │  Todo API    │ │
+│  └─────────────────┘    └─────────────────┘    └──────────────┘ │
+│           │                       │                       │      │
+├─────────────────────────────────────────────────────────────────┤
+│                       核心业务层                                │
+│                                                                 │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌──────────────┐ │
+│  │  PlannerAgent   │    │  BizAgents      │    │  TODO Manager│ │
+│  │  (计划执行)      │    │  (业务代理)      │    │  (任务分配)   │ │
+│  └─────────────────┘    └─────────────────┘    └──────────────┘ │
+│           │                       │                       │      │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌──────────────┐ │
+│  │  ListenerEngine │    │  TaskDriver     │    │  User Manager│ │
+│  │  (事件驱动)      │    │  (任务驱动)      │    │  (用户管理)   │ │
+│  └─────────────────┘    └─────────────────┘    └──────────────┘ │
+│                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                       基础设施层                                │
+│                                                                 │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌──────────────┐ │
+│  │   A2A Server    │    │   MCP Server    │    │  Data Layer  │ │
+│  │  (Agent通信)     │    │  (工具管理)      │    │  (数据存储)   │ │
+│  └─────────────────┘    └─────────────────┘    └──────────────┘ │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 核心组件说明
+
+#### 1. 客户端层
+- **Web客户端**: 基于React/Vue的Web应用，支持对话式交互
+- **管理后台**: 基于React的管理界面，支持系统配置和监控
+- **移动端App**: React Native应用，支持移动办公
+
+#### 2. API网关层
+- **认证授权**: JWT token认证，RBAC权限控制
+- **API路由**: RESTful API路由和负载均衡
+- **限流熔断**: 请求限流和熔断保护
+
+#### 3. 核心业务层
+- **PlannerAgent**: 计划执行引擎，负责整体流程控制
+- **BizAgents**: 业务代理，处理具体业务逻辑
+- **TODO Manager**: 任务分配管理器
+- **ListenerEngine**: 事件驱动引擎
+- **TaskDriver**: 任务驱动器
+- **User Manager**: 用户管理器
+
+#### 4. 基础设施层
+- **A2A Server**: Agent间通信服务器
+- **MCP Server**: Model Context Protocol服务器
+- **Data Layer**: 数据存储层（PostgreSQL + Redis）
+
+---
+
+## 🔄 核心执行流程
+
+### 1. 计划执行流程
+```
+用户输入 → 意图识别 → 计划匹配 → 创建PlanInstance → 启动执行 → 状态跟踪 → 完成通知
+```
+
+### 2. 人机交互流程
+```
+Agent执行 → 发现缺少参数 → 进入PAUSE状态 → 生成TODO → 分配任务 → 用户输入 → 继续执行
+```
+
+### 3. 错误恢复流程
+```
+任务失败 → 自动重试 → 达到最大重试次数 → 进入ERROR状态 → 人工干预 → Resume恢复 → 继续执行
+```
+
+---
+
+## 🧠 智能组件系统
+
+### 组件生成流程
+```
+参数定义 → 智能决策 → 数据源查询 → 组件生成 → 前端渲染 → 用户交互 → 数据收集
+```
+
+### 支持的组件类型
+- **基础组件**: input, textarea, select, radio, checkbox
+- **高级组件**: combobox, list, date, number, email, url
+- **特殊组件**: password, file, range
+
+### 数据源类型
+- **静态数据**: 预定义的选项列表
+- **工具列表**: 从MCP工具库获取
+- **A2A查询**: 通过Agent间通信获取
+- **数据库查询**: 从数据库动态获取
+
+---
+
+## 📋 TODO分配系统
+
+### 分配策略
+```
+TODO生成 → 智能分析 → 角色匹配 → 负载均衡 → 任务分配 → 通知发送 → 状态跟踪
+```
+
+### 分配规则
+- **基于参数类型**: IT参数分配给IT经理，HR参数分配给HR经理
+- **基于工作流**: 根据流程阶段分配相应角色
+- **基于负载**: 选择工作负载最轻的用户
+- **基于权限**: 确保用户有相应权限
+
+---
+
+## 🏢 管理系统架构
+
+### 管理模块
+```
+┌─────────────────────────────────────────────────────────┐
+│                    AIntegration 管理后台                 │
+├─────────────────────────────────────────────────────────┤
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐       │
+│  │ 用户管理     │ │ 角色权限     │ │ 组织架构     │       │
+│  │ User Mgmt   │ │ Role & Auth │ │ Org Chart   │       │
+│  └─────────────┘ └─────────────┘ └─────────────┘       │
+├─────────────────────────────────────────────────────────┤
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐       │
+│  │ 应用配置     │ │ A2A管理     │ │ MCP配置     │       │
+│  │ App Config  │ │ A2A Mgmt    │ │ MCP Config  │       │
+│  └─────────────┘ └─────────────┘ └─────────────┘       │
+├─────────────────────────────────────────────────────────┤
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐       │
+│  │ 工作流管理   │ │ 监控面板     │ │ 日志审计     │       │
+│  │ Workflow    │ │ Monitoring  │ │ Audit Log   │       │
+│  └─────────────┘ └─────────────┘ └─────────────┘       │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 权限模型
+```
+用户(User) ←→ 角色(Role) ←→ 权限(Permission) ←→ 资源(Resource)
+```
+
+---
+
+## 🔧 技术栈
+
+### 后端技术
+- **语言**: Python 3.11+
+- **框架**: FastAPI
+- **数据库**: PostgreSQL (主库) + Redis (缓存)
+- **消息队列**: RabbitMQ
+- **监控**: Prometheus + Grafana
+- **日志**: ELK Stack
+
+### 前端技术
+- **Web框架**: React 18 + TypeScript
+- **UI库**: Ant Design / Material-UI
+- **状态管理**: Redux Toolkit
+- **构建工具**: Vite
+- **移动端**: React Native
+
+### 基础设施
+- **容器化**: Docker + Kubernetes
+- **CI/CD**: GitHub Actions
+- **云服务**: AWS/Azure/GCP
+- **CDN**: CloudFlare
+
+---
+
+## 📊 数据模型
+
+### 核心实体关系
+```
+Plan ←→ PlanInstance ←→ TaskInstance ←→ Listener
+  ↓
+TodoTask ←→ User ←→ Role ←→ Permission
+  ↓
+AppConfig ←→ Tenant
+```
+
+### 主要数据模型
+- **Plan**: 计划模板，定义业务流程
+- **PlanInstance**: 计划实例，具体执行过程
+- **TaskInstance**: 任务实例，单个执行步骤
+- **Listener**: 侦听器，事件触发逻辑
+- **TodoTask**: TODO任务，人工干预点
+- **User**: 用户，系统使用者
+- **Role**: 角色，权限分组
+- **AppConfig**: 应用配置，业务参数
+
+---
+
+## 🔒 安全架构
+
+### 安全层次
+```
+┌─────────────────────────────────────────────────────────┐
+│                      安全架构                            │
+├─────────────────────────────────────────────────────────┤
+│  应用安全: JWT认证, RBAC权限, API限流, 输入验证           │
+├─────────────────────────────────────────────────────────┤
+│  数据安全: 数据加密, 敏感数据脱敏, 数据备份              │
+├─────────────────────────────────────────────────────────┤
+│  网络安全: HTTPS, VPN, 防火墙, DDoS防护                  │
+├─────────────────────────────────────────────────────────┤
+│  基础设施: 容器安全, 镜像扫描, 运行时保护                 │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 多租户隔离
+- **数据隔离**: 基于tenant_id的数据分区
+- **应用隔离**: 独立的配置和权限空间
+- **网络隔离**: VPC和子网隔离
+- **资源隔离**: 独立的计算和存储资源
+
+---
+
+## 📈 性能与扩展
+
+### 性能指标
+- **响应时间**: API响应 < 200ms
+- **吞吐量**: 支持1000+并发用户
+- **可用性**: 99.9%服务可用性
+- **扩展性**: 水平扩展支持
+
+### 扩展策略
+- **水平扩展**: 微服务架构，支持独立扩展
+- **缓存策略**: Redis缓存，减少数据库压力
+- **负载均衡**: 多实例负载均衡
+- **数据库优化**: 读写分离，分库分表
+
+---
+
+## 🚀 部署架构
+
+### 生产环境
+```
+┌─────────────────────────────────────────────────────────┐
+│                    生产环境架构                          │
+├─────────────────────────────────────────────────────────┤
+│  Load Balancer (Nginx/HAProxy)                         │
+│           │                                             │
+│  ┌────────┴────────┐    ┌─────────────┐                │
+│  │   API Gateway   │    │   Static CDN│                │
+│  └────────┬────────┘    └─────────────┘                │
+│           │                                             │
+│  ┌────────┴────────┐    ┌─────────────┐                │
+│  │   Web Services  │    │  Admin Panel│                │
+│  └────────┬────────┘    └─────────────┘                │
+│           │                                             │
+│  ┌────────┴────────┐    ┌─────────────┐                │
+│  │   Database      │    │   Cache      │                │
+│  │   (PostgreSQL)  │    │   (Redis)    │                │
+│  └─────────────────┘    └─────────────┘                │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 开发环境
+- **本地开发**: Docker Compose
+- **测试环境**: Kubernetes集群
+- **预发布环境**: 生产环境镜像
+
+---
+
+## 📋 开发规范
+
+### 代码规范
+- **Python**: PEP 8 + Black格式化
+- **TypeScript**: ESLint + Prettier
+- **API**: OpenAPI 3.0规范
+- **文档**: Markdown + Swagger
+
+### 测试策略
+- **单元测试**: 覆盖率 > 80%
+- **集成测试**: API端到端测试
+- **性能测试**: 压力测试和负载测试
+- **安全测试**: 漏洞扫描和渗透测试
+
+---
+
+## 🔄 版本管理
+
+### 版本策略
+- **主版本**: 重大功能更新
+- **次版本**: 新功能添加
+- **修订版本**: Bug修复和小改进
+
+### 发布流程
+```
+开发 → 测试 → 代码审查 → 预发布 → 生产发布 → 监控
+```
+
+---
+
+**这个架构设计为AIntegration提供了坚实的技术基础，支持企业级应用的各种需求！**

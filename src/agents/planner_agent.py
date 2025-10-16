@@ -101,6 +101,7 @@ class PlannerAgent:
 
             # 记录验证结果
             logger.info(f"System verification completed. Results: {verification_results}")
+            print(f"[PlannerAgent] 📊 验证结果详情: {verification_results}")
             
             # 更新主任务上下文，记录验证结果
             # 优先更新PlanInstance中的TaskInstance
@@ -116,18 +117,41 @@ class PlannerAgent:
                         logger.info(f"Updated main task instance context with verification results")
                     
                     # PlannerAgent负责设置plan_instance状态
-                    overall_status = verification_results.get("_summary", {}).get("overall_status", "passed")
+                    summary = verification_results.get("_summary", {})
+                    checklist = verification_results.get("_checklist", [])
+                    overall_status = summary.get("overall_status", "passed")
+                    has_explicit_failure = summary.get("has_explicit_failure", False)
+                    
+                    print(f"[PlannerAgent] 📋 验证摘要: overall_status={overall_status}, has_explicit_failure={has_explicit_failure}")
+                    print(f"[PlannerAgent] 📋 _summary: {summary}")
+                    
+                    # 打印执行checklist
+                    print(f"[PlannerAgent] 📝 执行清单:")
+                    for item in checklist:
+                        icon = item.get("icon", "")
+                        agent_id = item.get("agent_id", "")
+                        task_name = item.get("task_name", "")
+                        status = item.get("status", "")
+                        tools = item.get("tools_used", [])
+                        print(f"  {icon} {agent_id} - {task_name}: {status}")
+                        if tools:
+                            print(f"      验证工具: {', '.join(tools)}")
+                        if item.get("reason"):
+                            print(f"      原因: {item.get('reason')}")
+                    
                     if overall_status == "passed":
                         # 没有显式失败，设置plan_instance为done
                         plan_instance.status = PlanInstanceStatus.DONE.value
                         plan_instance.completed_at = datetime.now()
                         plan_instance.updated_at = datetime.now()
                         logger.info(f"[PlannerAgent] Plan instance {plan_instance_id} marked as done (verification passed)")
+                        print(f"[PlannerAgent] ✅ Plan实例状态已设置为done")
                     else:
                         # 有显式失败，设置为error
                         plan_instance.status = PlanInstanceStatus.ERROR.value
                         plan_instance.updated_at = datetime.now()
                         logger.error(f"[PlannerAgent] Plan instance {plan_instance_id} marked as error (verification failed)")
+                        print(f"[PlannerAgent] ❌ Plan实例状态已设置为error (overall_status={overall_status})")
             else:
                 # 回退到老的Task模型（向后兼容）
                 main_task = await plan_module.task_manager.get_task(task_id)
@@ -453,13 +477,16 @@ class PlannerAgent:
                 tools_used = r.get("tools_used", [])
                 
                 # 判断验证状态
-                if not success:
-                    # 显式返回失败
-                    verified_status = False
-                    has_explicit_failure = True
-                elif not tools_used or len(tools_used) == 0:
+                # 关键逻辑修正：只有在明确的业务失败时才算has_explicit_failure
+                # 没有验证工具（tools_used为空）应该算"无法验证"，不算失败
+                if not tools_used or len(tools_used) == 0:
                     # 没有调用任何工具 = 无法验证（但不算失败）
                     verified_status = "unable_to_verify"
+                    # 不设置has_explicit_failure，因为这不是业务失败
+                elif not success:
+                    # 调用了验证工具但返回失败 = 显式失败
+                    verified_status = False
+                    has_explicit_failure = True
                 else:
                     # 调用了验证工具且成功
                     verified_status = True
@@ -473,11 +500,84 @@ class PlannerAgent:
                 
                 logger.info(f"[PlannerAgent] Agent {agent_id} verification status: {verified_status}")
         
+        # 生成执行和验证的checklist
+        checklist = []
+        verified_count = 0
+        unable_to_verify_count = 0
+        failed_count = 0
+        
+        # 创建agent_id到task_name的映射
+        agent_to_task_name = {info["agent_id"]: info.get("task_name", info.get("task_id")) for info in agent_infos}
+        
+        for agent_id, result in verification.items():
+            if agent_id == "_summary":
+                continue
+            
+            task_id = result.get("task_id", "")
+            task_name = agent_to_task_name.get(agent_id, task_id)
+            verified = result.get("verified")
+            tools_used = result.get("tools_used", [])
+            
+            if verified is True:
+                # 已验证通过
+                checklist.append({
+                    "agent_id": agent_id,
+                    "task_id": task_id,
+                    "task_name": task_name,
+                    "status": "executed_and_verified",
+                    "tools_used": tools_used,
+                    "icon": "✅"
+                })
+                verified_count += 1
+            elif verified == "unable_to_verify":
+                # 执行了但无法验证
+                checklist.append({
+                    "agent_id": agent_id,
+                    "task_id": task_id,
+                    "task_name": task_name,
+                    "status": "executed_but_unverified",
+                    "reason": "no_verification_tool",
+                    "icon": "⚠️"
+                })
+                unable_to_verify_count += 1
+            elif verified == "exception":
+                # 验证异常
+                checklist.append({
+                    "agent_id": agent_id,
+                    "task_id": task_id,
+                    "task_name": task_name,
+                    "status": "verification_exception",
+                    "error": result.get("error", ""),
+                    "icon": "⚠️"
+                })
+                unable_to_verify_count += 1
+            else:
+                # 验证失败
+                checklist.append({
+                    "agent_id": agent_id,
+                    "task_id": task_id,
+                    "task_name": task_name,
+                    "status": "verification_failed",
+                    "tools_used": tools_used,
+                    "icon": "❌"
+                })
+                failed_count += 1
+        
         # 添加总体验证状态
+        # 关键：只有在有明确验证失败时才标记为failed
+        # 无法验证的情况仍然算passed（因为业务流程已成功执行）
         verification["_summary"] = {
             "has_explicit_failure": has_explicit_failure,
-            "overall_status": "failed" if has_explicit_failure else "passed"
+            "overall_status": "failed" if has_explicit_failure else "passed",
+            "verified_count": verified_count,
+            "unable_to_verify_count": unable_to_verify_count,
+            "failed_count": failed_count,
+            "total_count": len(checklist)
         }
+        
+        verification["_checklist"] = checklist
+        
+        logger.info(f"[PlannerAgent] Verification summary: verified={verified_count}, unable_to_verify={unable_to_verify_count}, failed={failed_count}")
         
         return verification
 

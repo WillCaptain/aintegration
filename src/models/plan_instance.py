@@ -531,6 +531,63 @@ class PlanInstance:
                 return task_instance
         return None
     
+    def get_execution_trace(self) -> Dict[str, Any]:
+        """
+        获取计划执行追踪信息（执行清单+验证摘要）
+        
+        返回格式:
+        {
+            "checklist": [
+                {
+                    "agent_id": "hr",
+                    "task_id": "002",
+                    "task_name": "新员工注册",
+                    "status": "executed_and_verified",  # 或 "executed_but_unverified" 或 "verification_failed"
+                    "tools_used": ["query_profile"],
+                    "icon": "✅"  # 或 "⚠️" 或 "❌"
+                },
+                ...
+            ],
+            "summary": {
+                "overall_status": "passed",  # 或 "failed"
+                "has_explicit_failure": false,
+                "verified_count": 3,
+                "unable_to_verify_count": 2,
+                "failed_count": 0,
+                "total_count": 5
+            },
+            "verification_completed": true  # planner_verification是否完成
+        }
+        """
+        main_task = self.get_main_task_instance()
+        if not main_task or not hasattr(main_task, 'context'):
+            return {
+                "checklist": [],
+                "summary": {
+                    "overall_status": "unknown",
+                    "verified_count": 0,
+                    "unable_to_verify_count": 0,
+                    "failed_count": 0,
+                    "total_count": 0
+                },
+                "verification_completed": False
+            }
+        
+        verification_results = main_task.context.get("verification_results", {})
+        planner_verification = main_task.context.get("planner_verification")
+        
+        return {
+            "checklist": verification_results.get("_checklist", []),
+            "summary": verification_results.get("_summary", {
+                "overall_status": "unknown",
+                "verified_count": 0,
+                "unable_to_verify_count": 0,
+                "failed_count": 0,
+                "total_count": 0
+            }),
+            "verification_completed": planner_verification == "completed"
+        }
+    
     def update_task_instance_status(self, task_id: str, status: str, context: Dict[str, Any] = None):
         """更新任务实例状态"""
         task_instance = self.get_task_instance(task_id)

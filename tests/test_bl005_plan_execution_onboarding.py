@@ -162,7 +162,7 @@ class TestBL005PlanExecutionOnboarding:
         assert main_task_config["name"] == "新员工完成入职"
 
     @pytest.mark.asyncio
-    async def test_listener_chain_execution_sequence(self, env_setup):
+    async def test_will_zhang_onboarding_with_planner_verification(self, env_setup):
         """测试侦听器链式执行序列"""
         
         # 动态端口
@@ -540,135 +540,6 @@ result = {
         
         print("✅ Planner 验证结果验证通过")
 
-    @pytest.mark.asyncio
-    async def test_planner_triggered_on_main_done(self, env_setup):
-        """测试主任务完成时Planner触发动态补齐功能"""
-        
-        # 动态端口
-        mock_port = self._get_free_port()
-        mcp_port = self._get_free_port()
-        os.environ["MOCK_API_URL"] = f"http://127.0.0.1:{mock_port}"
-
-        # 启动 Mock API
-        mock_task = asyncio.create_task(run_mock_api(host="127.0.0.1", port=mock_port))
-
-        # 启动 MCP Server
-        mcp_server = MCPServer(host="127.0.0.1", port=mcp_port)
-        mcp_server.load_tools_from_directory("config/apps")
-        mcp_task = asyncio.create_task(mcp_server.run_async())
-        
-        # 等待服务就绪
-        await asyncio.sleep(3)
-        
-        # 验证 Mock API 是否就绪
-        import httpx
-        for i in range(10):
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(f"http://127.0.0.1:{mock_port}/docs")
-                    if response.status_code == 200:
-                        print("Mock API 已就绪")
-                        break
-            except Exception:
-                await asyncio.sleep(0.5)
-        else:
-            print("警告: Mock API 可能未完全启动")
-
-        # 初始化 PlanModule
-        db = MemoryDatabaseConnection()
-        plan_module = PlanModule(db.plan_repo, db.task_repo, db.listener_repo)
-        await plan_module.start()
-        
-        # 确保侦听器引擎已启动
-        if not plan_module.listener_engine.is_running:
-            await plan_module.listener_engine.start()
-
-        try:
-            # 创建A2A Server并注册具备查询能力的虚拟Agent
-            from src.infrastructure.a2a_server import A2AServer
-            from src.infrastructure.a2a_client import DefaultA2AClient
-            
-            a2a_server = A2AServer()
-            await a2a_server.register_agent({
-                "agent_id": "hr_agent",
-                "agent_name": "HR Agent",
-                "provider": "internal",
-                "version": "1.0.0",
-                "capabilities": ["query_profile"],
-                "endpoints": {"execute": "/agents/hr/execute"}
-            })
-            await a2a_server.register_agent({
-                "agent_id": "inventory_agent",
-                "agent_name": "Inventory Agent",
-                "provider": "internal",
-                "version": "1.0.0",
-                "capabilities": ["check_outbound_status"],
-                "endpoints": {"execute": "/agents/inv/execute"}
-            })
-            await a2a_server.register_agent({
-                "agent_id": "access_agent",
-                "agent_name": "Access Agent",
-                "provider": "internal",
-                "version": "1.0.0",
-                "capabilities": ["query_access"],
-                "endpoints": {"execute": "/agents/access/execute"}
-            })
-            
-            # 验证所有Agent都已注册
-            agents = await a2a_server.discover_agents()
-            print(f"已注册的Agent: {[a['agent_id'] for a in agents]}")
-            
-            # 将A2A客户端注入PlanModule
-            plan_module.set_a2a_client(DefaultA2AClient(a2a_server))
-
-            # 创建最小计划：仅有主任务，无其他任务和侦听器
-            plan_config = {
-                "plan_id": "planner_trigger_test",
-                "name": "Planner触发测试",
-                "description": "主任务完成后由Planner动态补齐",
-                "main_task_id": "001",
-                "tasks": [
-                    {
-                        "task_id": "001",
-                        "name": "主任务",
-                        "prompt": "完成主任务"
-                    }
-                ],
-                "listeners": []
-            }
-            
-            plan = await plan_module.create_plan_from_config(plan_config)
-            assert plan.id == "planner_trigger_test"
-            
-            # 使用新的实例API启动计划
-            prompt = "Planner触发测试"
-            plan_instance = await plan_module.start_plan_by_prompt(prompt, plan.id)
-            
-            # 设置员工上下文
-            await self._setup_employee_context(plan_module, plan_instance)
-            
-            # 将主任务置为Done，触发Planner
-            main_task = plan_instance.get_main_task_instance()
-            main_task.status = "Done"
-            
-            # 等待Planner处理和任务执行
-            await asyncio.sleep(5)
-            
-            # 验证 Planner 发起的查询调用（query_profile / check_outbound_status / query_access）
-            await asyncio.sleep(2)  # 等待工具调用完成
-            await self._verify_planner_queries_in_log()
-            
-        finally:
-            # 清理
-            if 'mock_task' in locals():
-                mock_task.cancel()
-            if 'mcp_task' in locals():
-                mcp_task.cancel()
-            try:
-                await asyncio.gather(mock_task, mcp_task, return_exceptions=True)
-            except:
-                pass
-    
     @pytest.mark.asyncio
     async def test_will_zhang_onboarding_with_retry_success(self, env_setup):
         """
