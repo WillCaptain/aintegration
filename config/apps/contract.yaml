@@ -1,20 +1,64 @@
 name: contract
 system_context: "你是一个合同生成与下发系统的专业代理"
 tools:
-  - name: generate_contract
-    description: 生成劳动合同并输出PDF链接
+  - name: create_contact
+    description: 创建合同联系人信息
     endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
     parameters:
       type: object
       properties:
-        employee_name:
+        name:
           type: string
-        position:
+          description: 联系人姓名
+        phone:
           type: string
-        start_date:
+          description: 联系人手机号码
+        id_card:
           type: string
+          description: 联系人身份证号码
         email:
           type: string
-      required: [employee_name, position, start_date]
+          description: 联系人邮箱地址
+        region:
+          type: string
+          description: 联系人所在地区
+      required: [name, phone, id_card, email, region]
+  
+  - name: create_contract
+    description: 基于联系人信息创建合同
+    endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
+    parameters:
+      type: object
+      properties:
+        contact_id:
+          type: string
+          description: 联系人ID
+        contract_type:
+          type: string
+          description: 合同类型
+        start_date:
+          type: string
+          description: 合同开始日期
+        end_date:
+          type: string
+          description: 合同结束日期
+      required: [contact_id, contract_type, start_date, end_date]
+  
+  - name: sign_contract
+    description: 完成合同签署流程
+    endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
+    parameters:
+      type: object
+      properties:
+        contract_id:
+          type: string
+          description: 合同ID
+        signer_name:
+          type: string
+          description: 签署人姓名
+        sign_date:
+          type: string
+          description: 签署日期
+      required: [contract_id, signer_name, sign_date]
 
 

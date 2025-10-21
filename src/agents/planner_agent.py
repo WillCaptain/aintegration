@@ -25,6 +25,7 @@ from ..infrastructure.llm_client import build_llm_client
 from ..utils.execution_logger import execution_logger
 from ..models.plan_instance import PlanInstanceStatus
 from ..models.listener import Listener
+from ..core.todo_manager import TodoTask
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ class PlannerAgent:
 
             # 处理任务错误状态（微动态规划）
             if str(new_status).lower() == "error":
+                print(f"[PlannerAgent] 检测到任务 {task_id} 状态变为 Error，调用 _handle_task_error")
                 await self._handle_task_error(plan_module, plan_id, task_id, plan_context, is_main_task, plan_instance_id)
                 return
 
@@ -242,7 +244,7 @@ class PlannerAgent:
         if not listener:
             # 回退：从listener_repo查找
             print(f"[Planner] 尝试从listener_repo查找: {listener_id}")
-            listener = await plan_module.listener_manager.listener_repo.get_by_id(listener_id)
+            listener = await plan_module.listener_repo.get_by_id(listener_id)
         
         if not listener:
             logger.warning(f"Listener {listener_id} not found for retry")
@@ -253,13 +255,35 @@ class PlannerAgent:
         print(f"[Planner] 获取到侦听器: id={listener.id}, type={listener.listener_type}, agent_id={getattr(listener, 'agent_id', None)}")
         
         # 获取最新计划上下文（包含所有任务的当前状态）
-        plan_context = await plan_module.listener_engine._get_plan_context(plan_id)
-        # 如果存在 plan_instance_id，添加到上下文中
         if plan_instance_id:
-            plan_context["plan_instance_id"] = plan_instance_id
+            # 从plan_instance获取最新上下文，包含注入的参数
+            plan_instance = await plan_module.get_plan_instance(plan_instance_id)
+            if plan_instance:
+                plan_context = {
+                    "plan_id": plan_id,
+                    "plan_instance_id": plan_instance_id,
+                    "context": plan_instance.context,
+                    "prompt": plan_instance.prompt,
+                    "tasks": {}
+                }
+                # 添加所有任务的当前状态和context
+                for task_id, task_instance in plan_instance.task_instances.items():
+                    plan_context["tasks"][task_id] = {
+                        "status": task_instance.status,
+                        "context": task_instance.context,
+                        "name": task_id  # 使用task_id作为name
+                    }
+                print(f"[Planner] 从plan_instance获取上下文，包含注入参数")
+            else:
+                plan_context = await plan_module.listener_engine._get_plan_context(plan_id)
+                plan_context["plan_instance_id"] = plan_instance_id
+        else:
+            plan_context = await plan_module.listener_engine._get_plan_context(plan_id)
         
         print(f"[Planner] plan_context内容: tasks数量={len(plan_context.get('tasks', {}))}")
         print(f"[Planner] 主任务001 context keys: {list(plan_context.get('tasks', {}).get('001', {}).get('context', {}).keys())}")
+        print(f"[Planner] 主任务001 context内容: {plan_context.get('tasks', {}).get('001', {}).get('context', {})}")
+        print(f"[Planner] 主任务001是否有injected_params: {'injected_params' in plan_context.get('tasks', {}).get('001', {}).get('context', {})}")
         
         # 检查是否找到了listener
         if not listener:
@@ -596,13 +620,41 @@ class PlannerAgent:
         
         # 检查主任务是否已经在"等待resume"状态，如果是，不做重试
         if is_main_task:
-            # 获取task instance
+            # 获取task instance和plan instance
             task = None
+            plan_instance = None
             if plan_instance_id:
                 plan_instance = await plan_module.get_plan_instance(plan_instance_id)
                 if plan_instance:
                     task = plan_instance.get_task_instance(task_id)
             
+            # 根据错误原因决定处理策略
+            error_reason = None
+            if task and hasattr(task, 'context'):
+                error_reason = task.context.get("reason")
+            elif plan_instance and plan_instance.error_info:
+                error_reason = plan_instance.error_info.get("reason")
+            
+            print(f"[PlannerAgent] 检测到错误原因: {error_reason}")
+            
+            if error_reason == "missing_params":
+                # 处理参数缺失：生成TODO，等待用户输入
+                print(f"[PlannerAgent] 处理missing_params错误，TODO已生成，等待用户输入参数")
+                # TODO已经由TaskDriver生成，这里只需要标记为等待resume状态
+                if task:
+                    task.context["error_info"] = {
+                        "status": "waiting_for_resume",
+                        "reason": "missing_params",
+                        "todo_generated": True
+                    }
+                if plan_instance:
+                    plan_instance.error_info = {
+                        "reason": "missing_params",
+                        "status": "waiting_for_resume"
+                    }
+                print(f"[PlannerAgent] ✓ 已标记为等待resume状态，等待用户输入参数")
+                return
+
             if task and hasattr(task, 'context') and task.context.get("error_info", {}).get("status") == "waiting_for_resume":
                 logger.info(f"Main task {task_id} already in waiting_for_resume state, skip retry")
                 return
@@ -755,7 +807,7 @@ class PlannerAgent:
                 })
                 logger.info(f"Plan {plan_id} marked as error, waiting for resume")
     
-    async def resume_plan(self, plan_module, plan_id: str, plan_instance_id: Optional[str] = None) -> bool:
+    async def resume_plan(self, plan_module, plan_id: str,plan_instance_id: Optional[str] = None, error_reason: Optional[TodoTask] = None , todo: Optional[object] = None) -> bool:
         """恢复错误状态的计划（Resume机制）"""
         log_key = plan_instance_id or plan_id  # 优先使用 plan_instance_id
         logger.info(f"Resuming plan {plan_id} (instance: {plan_instance_id})")
@@ -780,7 +832,55 @@ class PlannerAgent:
             logger.warning(f"Main task is not in Error status: {main_task.status if main_task else 'None'}")
             return False
         
-        # 从context读取failed_listener_id
+        # 检查错误原因
+        #error_reason = plan_instance.error_info.get('reason') if plan_instance.error_info else None
+        print(f"[PlannerAgent] 计划错误原因: {error_reason}")
+        
+        if error_reason == "missing_params":
+            # 处理参数缺失的情况
+            print(f"[PlannerAgent] 处理missing_params错误，注入参数并重启主任务")
+            
+            # 获取TODO中的参数
+            #from src.core.todo_manager import TodoManager
+            #todo_manager = TodoManager()
+            #todos = await todo_manager.get_workflow_todos(plan_instance_id)
+            
+            #if todos:
+            # 获取最新的TODO参数
+            #latest_todo = todos[-1]  # 假设取最新的TODO
+            #if latest_todo.parameters:
+            print(f"[PlannerAgent] 从TODO获取参数: {todo.completion_data}")
+            print(f"[PlannerAgent] TODO状态: {todo.status}")
+            print(f"[PlannerAgent] TODO类型: {todo.type}")
+            
+            # 将参数注入到主任务的context中
+            if "injected_params" not in main_task.context:
+                main_task.context["injected_params"] = {}
+            if todo.completion_data:
+                main_task.context["injected_params"].update(todo.completion_data)
+                print(f"[PlannerAgent] 注入的参数: {main_task.context['injected_params']}")
+            else:
+                print(f"[PlannerAgent] ⚠️ TODO没有completion_data，无法注入参数")
+            
+            print(f"[PlannerAgent] ✓ 参数已注入到主任务context")
+            
+            # 恢复计划状态
+            plan_instance.status = PlanInstanceStatus.RUNNING.value
+            print(f"[PlannerAgent] ✓ 计划已恢复为RUNNING状态")
+            
+            # 只重新执行失败的侦听器，不改变主任务状态
+            # 这样可以避免重新触发L001，而是继续执行当前失败的侦听器
+            listener_id = todo.listener_id
+            print(f"[PlannerAgent] 重新执行失败的侦听器: {listener_id}")
+            await self._retry_listener_by_id(plan_module, plan_id, listener_id, plan_instance_id)
+            #else:
+            #    print(f"[PlannerAgent] 警告: 没有找到TODO，无法获取侦听器ID")
+            from src.core.todo_manager import TodoManager
+            todo_manager = TodoManager()
+            await todo_manager.complete_todo(todo.id, todo.completion_data)
+            return True
+        
+        # 处理其他错误情况（原有的failed_listener_id逻辑）
         failed_listener_id = main_task.context.get("failed_listener_id")
         if not failed_listener_id:
             logger.error(f"No failed_listener_id in main task context")

@@ -59,15 +59,43 @@ class ExecutionLogger:
             print(f"Failed to write execution log: {e}")
     
     def task_status_change(self, plan_id: str, task_id: str, old_status: str, new_status: str, 
-                          triggered_by: Optional[str] = None):
+                          triggered_by: Optional[str] = None, reason: Optional[str] = None, 
+                          context: Optional[Dict[str, Any]] = None):
         """记录任务状态变化"""
-        self.log("TASK_STATUS_CHANGE", {
+        log_data = {
             "plan_id": plan_id,
             "task_id": task_id,
             "old_status": old_status,
             "new_status": new_status,
             "triggered_by": triggered_by or "system"
-        })
+        }
+        if reason:
+            log_data["reason"] = reason
+        if context:
+            # 过滤掉可能导致循环引用的字段
+            safe_context = {}
+            for key, value in context.items():
+                try:
+                    # 尝试序列化来检测循环引用
+                    import json
+                    json.dumps(value)
+                    safe_context[key] = value
+                except (TypeError, ValueError):
+                    # 如果无法序列化，转换为字符串
+                    if key == "execution_result":
+                        # 对于execution_result，只保留基本信息
+                        if isinstance(value, dict):
+                            safe_context[key] = {
+                                "success": value.get("success"),
+                                "reason": value.get("reason"),
+                                "response": value.get("response")
+                            }
+                        else:
+                            safe_context[key] = str(value)
+                    else:
+                        safe_context[key] = str(value)
+            log_data["context"] = safe_context
+        self.log("TASK_STATUS_CHANGE", log_data)
     
     def listener_triggered(self, plan_id: str, listener_id: str, trigger_task_id: str, 
                           trigger_condition: str):

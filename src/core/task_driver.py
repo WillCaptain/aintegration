@@ -98,7 +98,7 @@ class TaskDriver:
             else:
                 # 失败：调用determine_task_updates生成默认更新（包括001 Error）
                 print(f"[TaskDriver] Agent执行失败，调用determine_task_updates生成默认更新")
-                task_updates = self.determine_task_updates(listener, result)
+                task_updates = await self.determine_task_updates(listener, result)
                 result['task_updates'] = task_updates
                 print(f"[TaskDriver] 失败生成的task_updates: {task_updates}")
             
@@ -109,7 +109,7 @@ class TaskDriver:
             logger.error(f"Error executing agent listener {listener.id}: {e}")
             error_result = {"success": False, "error": str(e)}
             # 生成默认的错误更新
-            task_updates = self.determine_task_updates(listener, error_result)
+            task_updates = await self.determine_task_updates(listener, error_result)
             error_result['task_updates'] = task_updates
             return error_result
     
@@ -138,7 +138,7 @@ class TaskDriver:
             else:
                 # 失败：调用determine_task_updates生成默认更新（包括001 Error）
                 print(f"[TaskDriver] 代码执行失败，调用determine_task_updates生成默认更新")
-                task_updates = self.determine_task_updates(listener, result)
+                task_updates = await self.determine_task_updates(listener, result)
                 result['task_updates'] = task_updates
                 print(f"[TaskDriver] 失败生成的task_updates: {task_updates}")
             
@@ -148,7 +148,7 @@ class TaskDriver:
             logger.error(f"Error executing code listener {listener.id}: {e}")
             error_result = {"success": False, "error": str(e)}
             # 生成默认的错误更新
-            task_updates = self.determine_task_updates(listener, error_result)
+            task_updates = await self.determine_task_updates(listener, error_result)
             error_result['task_updates'] = task_updates
             return error_result
     
@@ -280,7 +280,7 @@ class TaskDriver:
             # 解析失败，包装为成功响应
             return {"success": True, "result": response}
     
-    def determine_task_updates(self, listener: Listener, execution_result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def determine_task_updates(self, listener: Listener, execution_result: Dict[str, Any]) -> List[Dict[str, Any]]:
         """根据执行结果确定任务更新"""
         print(f"[TaskDriver] 确定任务更新: listener={listener.id}, result={execution_result}")
         updates = []
@@ -359,49 +359,132 @@ class TaskDriver:
                 print(f"[TaskDriver] 成功情况但缺少目标任务或状态")
         else:
             # 失败情况
-            target_task_id = listener.get_failure_target_task()
-            target_status = listener.get_failure_target_status()
-            context_updates = listener.get_failure_context()
-            
-            print(f"[TaskDriver] 失败情况: target_task_id={target_task_id}, target_status={target_status}, context={context_updates}")
-            
-            if target_task_id and target_status:
-                updates.append({
-                    "task_id": target_task_id,
-                    "status": target_status,
-                    "context": context_updates,
-                    "execution_result": execution_result,
-                    "error": execution_result.get("error", "Unknown error"),
-                    "plan_instance_id": listener.plan_instance_id  # 添加 plan_instance_id
-                })
-                print(f"[TaskDriver] 添加失败更新: {updates[-1]}")
-            else:
-                # 默认行为：失败时设置主任务为Error（触发Planner重试）
-                # 约定：主任务ID默认为"001"
-                # 关键：在context中记录失败的listener_id，供PlannerAgent读取并重试
-                print(f"[TaskDriver] ⚠️ 失败但无failure_output，使用默认行为：设置主任务001 Error并记录失败的listener_id")
-                print(f"[TaskDriver] 失败的listener: {listener.id}")
-                print(f"[TaskDriver] 错误信息: {execution_result.get('error', 'Unknown error')}")
+            print(f"[TaskDriver] 失败情况，execution_result: {execution_result}")
+            print(f"[TaskDriver] reason字段: {execution_result.get('reason')}")
+            # 检查是否是missing_params错误
+            if execution_result.get("reason") == "missing_params":
+                print(f"[TaskDriver] 检测到missing_params错误，生成TODO并进入PAUSE状态")
                 
-                update_to_add = {
+                # 生成TODO
+                from src.core.todo_manager import TodoManager
+                from src.models.todo_task import TodoTask
+                
+                todo_manager = TodoManager.get_instance()
+                required_params = execution_result.get("required_params", {})
+                
+                # 构建交互JSON
+                interaction_json = {
+                    "fields": []
+                }
+                
+                for param_name, param_info in required_params.items():
+                    field = {
+                        "name": param_name,
+                        "type": param_info.get("type", "input"),
+                        "label": param_info.get("label", param_name),
+                        "description": param_info.get("description", f"请输入{param_name}"),
+                        "required": param_info.get("required", True)
+                    }
+                    interaction_json["fields"].append(field)
+                
+                # 创建TODO
+                from datetime import datetime
+                todo = TodoTask(
+                    id=f"todo_{listener.plan_instance_id}_{listener.id}",
+                    title=f"补充{listener.agent_id}工具参数",
+                    description=f"需要补充{listener.agent_id}工具的必需参数",
+                    type="parameter_input",
+                    priority="medium",
+                    assignee_id=None,
+                    assignee_role=None,
+                    plan_instance_id=listener.plan_instance_id,
+                    listener_id=listener.id,
+                    parameter_config={
+                        "interaction_json": interaction_json,
+                        "listener_id": listener.id,
+                        "agent_id": listener.agent_id
+                    },
+                    status="pending",
+                    created_at=datetime.now(),
+                    due_date=None,
+                    completed_at=None,
+                    completion_data=None,
+                    context={}
+                )
+                
+                todo = await todo_manager.create_parameter_todo(
+                    plan_instance_id=listener.plan_instance_id,
+                    listener_id=listener.id,
+                    parameter_config={
+                        "interaction_json": interaction_json,
+                        "listener_id": listener.id,
+                        "agent_id": listener.agent_id
+                    }
+                )
+                print(f"[TaskDriver] ✓ 生成TODO: {todo.id}")
+                
+                # 设置任务状态为error，计划实例为error
+                updates.append({
                     "task_id": "001",
                     "status": "Error",
                     "context": {
-                        "failed_listener_id": listener.id,  # 记录失败的侦听器ID
-                        "error": execution_result.get("error", "Unknown error"),
-                        "error_info": {
-                            "listener_id": listener.id,
-                            "agent_id": listener.agent_id if hasattr(listener, 'agent_id') else None,
-                            "error_message": execution_result.get("error", "Unknown error")
-                        }
+                        "todo_id": todo.id,
+                        "missing_params": required_params,
+                        "listener_id": listener.id,
+                        "agent_id": listener.agent_id,
+                        "reason": "missing_params"
                     },
-                    "execution_result": execution_result,
-                    "error": execution_result.get("error", "Unknown error"),
-                    "plan_instance_id": listener.plan_instance_id  # 添加 plan_instance_id
-                }
-                updates.append(update_to_add)
-                print(f"[TaskDriver] ✓ 添加默认失败更新: {update_to_add}")
-                print(f"[TaskDriver] context包含: failed_listener_id={listener.id}")
+                    "plan_instance_id": listener.plan_instance_id,
+                    "plan_instance_status": "error",
+                    "plan_instance_reason": "missing_params"
+                })
+                print(f"[TaskDriver] ✓ 设置任务为Error状态，计划为error状态，TODO: {todo.id}")
+                
+            else:
+                # 其他失败情况
+                target_task_id = listener.get_failure_target_task()
+                target_status = listener.get_failure_target_status()
+                context_updates = listener.get_failure_context()
+                
+                print(f"[TaskDriver] 失败情况: target_task_id={target_task_id}, target_status={target_status}, context={context_updates}")
+                
+                if target_task_id and target_status:
+                    updates.append({
+                        "task_id": target_task_id,
+                        "status": target_status,
+                        "context": context_updates,
+                        "execution_result": execution_result,
+                        "error": execution_result.get("error", "Unknown error"),
+                        "plan_instance_id": listener.plan_instance_id  # 添加 plan_instance_id
+                    })
+                    print(f"[TaskDriver] 添加失败更新: {updates[-1]}")
+                else:
+                    # 默认行为：失败时设置主任务为Error（触发Planner重试）
+                    # 约定：主任务ID默认为"001"
+                    # 关键：在context中记录失败的listener_id，供PlannerAgent读取并重试
+                    print(f"[TaskDriver] ⚠️ 失败但无failure_output，使用默认行为：设置主任务001 Error并记录失败的listener_id")
+                    print(f"[TaskDriver] 失败的listener: {listener.id}")
+                    print(f"[TaskDriver] 错误信息: {execution_result.get('error', 'Unknown error')}")
+                    
+                    update_to_add = {
+                        "task_id": "001",
+                        "status": "Error",
+                        "context": {
+                            "failed_listener_id": listener.id,  # 记录失败的侦听器ID
+                            "error": execution_result.get("error", "Unknown error"),
+                            "error_info": {
+                                "listener_id": listener.id,
+                                "agent_id": listener.agent_id if hasattr(listener, 'agent_id') else None,
+                                "error_message": execution_result.get("error", "Unknown error")
+                            }
+                        },
+                        "execution_result": execution_result,
+                        "error": execution_result.get("error", "Unknown error"),
+                        "plan_instance_id": listener.plan_instance_id  # 添加 plan_instance_id
+                    }
+                    updates.append(update_to_add)
+                    print(f"[TaskDriver] ✓ 添加默认失败更新: {update_to_add}")
+                    print(f"[TaskDriver] context包含: failed_listener_id={listener.id}")
         
         print(f"[TaskDriver] 最终更新列表: {updates}")
         return updates
@@ -411,6 +494,16 @@ class TaskDriver:
         try:
             print(f"[TaskDriver] 开始执行侦听器 {listener.id}, 类型: {listener.listener_type}")
             logger.info(f"Executing listener {listener.id} of type {listener.listener_type}")
+            
+            # 记录侦听器开始执行到plan_execution.log
+            from ..utils.execution_logger import execution_logger
+            execution_logger.log("LISTENER_STARTED", {
+                "plan_id": plan_instance.plan_id,
+                "listener_id": listener.id,
+                "listener_type": listener.listener_type,
+                "agent_id": getattr(listener, 'agent_id', None),
+                "trigger_condition": getattr(listener, 'trigger_condition', None)
+            })
             
             # 根据侦听器类型执行
             if listener.listener_type == 'agent':

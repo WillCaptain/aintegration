@@ -1,1 +1,8 @@
-<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="98.113" timestamp="2025-10-16T13:33:51.178824" hostname="imacdeMacBook-Air.local"><testcase classname="tests.test_bl005_plan_execution_onboarding.TestBL005PlanExecutionOnboarding" name="test_will_zhang_onboarding_with_multiple_retries_and_resume" time="98.075" /></testsuite></testsuites>
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="1" failures="0" skipped="0" tests="1" time="0.101" timestamp="2025-10-21T15:52:24.122912" hostname="imacdeMacBook-Air.local"><testcase classname="" name="tests.test_agent_listener_basic" time="0.000"><error message="collection failure">ImportError while importing test module '/Users/imac/Documents/code/github/aintegration/tests/test_agent_listener_basic.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/lib/python3.13/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_agent_listener_basic.py:13: in &lt;module&gt;
+    from tests.test_utils.mock_api import run_mock_api
+E   ModuleNotFoundError: No module named 'tests.test_utils'</error></testcase></testsuite></testsuites>

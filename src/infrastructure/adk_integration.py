@@ -74,110 +74,192 @@ class ReactAgent:
             except Exception:
                 self.max_retries = 3
 
-            for step_index in range(self.max_steps):
-                logger.debug("[Agent] step=%d prompt(head)=%r", step_index+1, cur_prompt[:300])
-                print(f"[ReactAgent] 步骤 {step_index+1}: 开始调用 propose_tool_call")
-                print(f"[ReactAgent] 步骤 {step_index+1}: LLM调用前，prompt长度={len(cur_prompt)}")
-                proposed = await self.llm.propose_tool_call(cur_prompt, tools=self._tools_declarations)
-                print(f"[ReactAgent] 步骤 {step_index+1}: LLM已调用，propose_tool_call 完成，结果: {proposed}")
-                if not proposed:
-                    print(f"[ReactAgent] 步骤 {step_index+1}: LLM返回None，未建议工具调用")
-                    print(f"[ReactAgent] 当前prompt内容: {cur_prompt[:500]}...")
+            # 初始化step_index
+            #step_index = 0
+            
+            logger.debug("[Agent] prompt(head)=%r",  cur_prompt[:300])
+            print(f"[ReactAgent] 开始调用 propose_tool_call")
+            print(f"[ReactAgent] LLM调用前，prompt长度={len(cur_prompt)}")
+            try:
+                print(f"[ReactAgent] 准备调用LLM，工具数量: {len(self._tools_declarations)}")
+                print(f"[ReactAgent] 工具列表: {[tool.get('name') for tool in self._tools_declarations]}")
+                import asyncio
+                print(f"[ReactAgent] 开始等待LLM响应...")
+                proposed = await asyncio.wait_for(
+                    self.llm.propose_tool_call(cur_prompt, tools=self._tools_declarations),
+                    timeout=30.0
+                )
+                print(f"[ReactAgent] LLM已调用，propose_tool_call 完成，结果: {proposed}")
+            except asyncio.TimeoutError:
+                print(f"[ReactAgent] LLM调用超时（30秒）")
+                return {
+                    "success": False,
+                    "error": "LLM调用超时",
+                    "response": "LLM调用超时",
+                    "tools_used": [],
+                    "result": {"success": False, "reason": "llm_timeout"}
+                }
+            except Exception as e:
+                print(f"[ReactAgent] LLM调用失败，错误: {e}")
+                return {
+                    "success": False,
+                    "error": f"LLM调用失败: {str(e)}",
+                    "response": f"LLM调用失败: {str(e)}",
+                    "tools_used": [],
+                    "result": {"success": False, "reason": "llm_error"}
+                }
+            if not proposed:
+                print(f"[ReactAgent] LLM返回None，未建议工具调用")
+                print(f"[ReactAgent] 当前prompt内容: {cur_prompt[:500]}...")
+                
+                # 保存完整prompt到文件用于调试
+                import os
+                from datetime import datetime
+                debug_dir = "tests/.artifacts"
+                os.makedirs(debug_dir, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                prompt_file = f"{debug_dir}/llm_none_prompt_{timestamp}.txt"
+                with open(prompt_file, 'w', encoding='utf-8') as f:
+                    f.write(f"=== LLM返回None时的完整Prompt ===\n")
+                    f.write(f"时间: {datetime.now().isoformat()}\n")
+                    f.write(cur_prompt)
+                print(f"[ReactAgent] 完整prompt已保存到: {prompt_file}")
+                
+                # 容错：从提示词中提取 '使用xxx工具' 作为工具名，进行一次直接调用
+                import re
+                m = re.search(r"使用\s*([A-Za-z0-9_\-]+)\s*工具", cur_prompt)
+                if m:
+                    tool_name = m.group(1)
+                    tool_args = {}
+                    print(f"[ReactAgent] 未获得建议，容错直接调用解析到的工具: {tool_name}")
                     
-                    # 保存完整prompt到文件用于调试
-                    import os
-                    from datetime import datetime
-                    debug_dir = "tests/.artifacts"
-                    os.makedirs(debug_dir, exist_ok=True)
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                    prompt_file = f"{debug_dir}/llm_none_prompt_{timestamp}.txt"
-                    with open(prompt_file, 'w', encoding='utf-8') as f:
-                        f.write(f"=== LLM返回None时的完整Prompt ===\n")
-                        f.write(f"时间: {datetime.now().isoformat()}\n")
-                        f.write(f"步骤: {step_index+1}\n\n")
-                        f.write(cur_prompt)
-                    print(f"[ReactAgent] 完整prompt已保存到: {prompt_file}")
+                    # 在fallback中也要先验证参数
+                    # 合并注入的参数
+                    if hasattr(self, '_injected_params') and self._injected_params:
+                        print(f"[ReactAgent] (fallback) 合并注入的参数: {self._injected_params}")
+                        tool_args.update(self._injected_params)
+                        print(f"[ReactAgent] (fallback) 合并后的参数: {tool_args}")
                     
-                    # 容错：从提示词中提取 '使用xxx工具' 作为工具名，进行一次直接调用
-                    import re
-                    m = re.search(r"使用\s*([A-Za-z0-9_\-]+)\s*工具", cur_prompt)
-                    if m:
-                        tool_name = m.group(1)
-                        tool_args = {}
-                        print(f"[ReactAgent] 未获得建议，容错直接调用解析到的工具: {tool_name}")
-                        schema = self.tool_schemas.get(tool_name, {})
-                        endpoint = schema.get("endpoint")
-                        if isinstance(endpoint, str):
-                            import os
-                            def _repl(m2):
-                                var, default = m2.group(1), m2.group(2) or ""
-                                return os.getenv(var, default)
-                            endpoint = re.sub(r"\$\{([^:}]+):?([^}]*)\}", _repl, endpoint)
-                        call_params = {
-                            "endpoint": endpoint or "",
-                            "tool": tool_name,
-                            "args": tool_args,
+                    # 验证工具参数是否足够
+                    missing_params = self._validate_tool_parameters(tool_name, tool_args)
+                    if missing_params:
+                        print(f"[ReactAgent] (fallback) 工具 {tool_name} 缺少必需参数: {missing_params}")
+                        return {
+                            "success": False,
+                            "reason": "missing_params",
+                            "required_params": missing_params,
+                            "response": f"工具 {tool_name} 缺少必需参数，需要用户输入",
+                            "tools_used": [],
+                            "result": {"success": False, "reason": "missing_params", "required_params": missing_params}
                         }
-                        last_error = None
-                        tool_output = None
-                        for attempt in range(1, self.max_retries + 1):
-                            exec_result = await self.mcp.execute_tool("call_tool", call_params)
-                            if exec_result and exec_result.get("success"):
-                                tool_output = exec_result
-                                break
-                            last_error = (exec_result or {}).get("error") or "unknown error"
-                            logger.warning("[Agent] tool '%s' failed attempt %d/%d: %s", tool_name, attempt, self.max_retries, last_error)
-                        if tool_output is None:
-                            running_summary.append({
-                                "step": step_index + 1,
-                                "action": tool_name,
-                                "args": tool_args,
-                                "output": {"success": False, "error": last_error},
-                            })
-                            return {"success": False, "error": f"Tool '{tool_name}' failed after {self.max_retries} attempts: {last_error}"}
-                        logger.debug("[Agent] (fallback) tool_output(head)=%r", (str(tool_output) or "")[:300])
-                        running_summary.append({
-                            "step": step_index + 1,
-                            "action": tool_name,
-                            "args": tool_args,
-                            "output": tool_output,
-                        })
-                        cur_prompt = (
-                            f"{cur_prompt}\n\n[工具调用结果 step={step_index+1} tool={tool_name}]\n"
-                            f"{tool_output}\n\n请基于以上结果给出最终答复。"
-                        )
-                        print(f"[ReactAgent] (fallback) 工具调用成功，重新组合提示词，准备调用 LLM 生成最终答复")
-                        final_text = await self.llm.generate(cur_prompt, tools=self._tools_declarations)
-                        print(f"[ReactAgent] (fallback) LLM 生成完成，结果: {final_text[:200] if final_text else 'None'}...")
-                        logger.debug("[Agent] final_text(head)=%r", (final_text or "")[:300])
-                        result = self._process_response(final_text)
-                        break
-                    else:
-                        logger.debug("[Agent] no tool proposed; stop without tool call")
-                        print(f"[ReactAgent] 步骤 {step_index+1}: 没有工具建议，调用 generate 生成最终答复")
-                        final_text = await self.llm.generate(cur_prompt, tools=self._tools_declarations)
-                        print(f"[ReactAgent] 步骤 {step_index+1}: generate 完成，结果: {final_text[:200] if final_text else 'None'}...")
-                        logger.debug("[Agent] final_text(head)=%r", (final_text or "")[:300])
-                        result = self._process_response(final_text)
-                        break
-                tool_name = proposed.get("name")
-                tool_args = proposed.get("arguments", {})
+                    
+                    schema = self.tool_schemas.get(tool_name, {})
+                    endpoint = schema.get("endpoint")
+                    if isinstance(endpoint, str):
+                        import os
+                        def _repl(m2):
+                            var, default = m2.group(1), m2.group(2) or ""
+                            return os.getenv(var, default)
+                        endpoint = re.sub(r"\$\{([^:}]+):?([^}]*)\}", _repl, endpoint)
+                    call_params = {
+                        "endpoint": endpoint or "",
+                        "tool": tool_name,
+                        "args": tool_args,
+                    }
+                    last_error = None
+                    tool_output = None
+                    print(f"[ReactAgent] (fallback) 调用工具: {tool_name}, args: {tool_args}")
+                    exec_result = await self.mcp.execute_tool("call_tool", call_params)
+                    print(f"[ReactAgent] (fallback) 工具调用返回: {exec_result}")
+                    
+                    # 检查内层result，看是否是missing_params错误
+                    if exec_result:
+                        inner_result = exec_result.get("output", {}).get("result", {}) if isinstance(exec_result.get("output"), dict) else {}
+                        print(f"[ReactAgent] (fallback) 内层result: {inner_result}")
+                        
+                        # 检查是否是missing_params错误
+                        if isinstance(inner_result, dict):
+                            reason = inner_result.get("reason")
+                            if reason == "missing_params":
+                                print(f"[ReactAgent] (fallback) 检测到missing_params错误")
+                                required_params = inner_result.get("required_params", {})
+                                return {
+                                    "success": False,
+                                    "reason": "missing_params",
+                                    "required_params": required_params,
+                                    "response": f"工具 {tool_name} 缺少必需参数，需要用户输入",
+                                    "tools_used": [tool_name],
+                                    "result": {"success": False, "reason": "missing_params", "required_params": required_params}
+                                }
+                            
+                            # 检查是否成功
+                            inner_success = inner_result.get("success", False)
+                            if not inner_success:
+                                last_error = inner_result.get("error", "unknown error")
+                                print(f"[ReactAgent] (fallback) 工具调用失败: {last_error}")
+                                return {"success": False, "error": f"Tool '{tool_name}' failed: {last_error}"}
+                        
+                        # 如果外层success=True，认为调用成功
+                        if exec_result.get("success"):
+                            tool_output = exec_result
+                    
+                    if tool_output is None:
+                        last_error = (exec_result or {}).get("error", "unknown error")
+                        return {"success": False, "error": f"Tool '{tool_name}' failed: {last_error}"}
+                    
+                    logger.debug("[Agent] (fallback) tool_output(head)=%r", (str(tool_output) or "")[:300])
+                    running_summary.append({
+                        "action": tool_name,
+                        "args": tool_args,
+                        "output": tool_output,
+                    })
+                    cur_prompt = (
+                        f"{cur_prompt}\n\n[工具调用结果 tool={tool_name}]\n"
+                        f"{tool_output}\n\n请基于以上结果给出最终答复。"
+                    )
+                    print(f"[ReactAgent] (fallback) 工具调用成功，重新组合提示词，准备调用 LLM 生成最终答复")
+                    final_text = await self.llm.generate(cur_prompt, tools=self._tools_declarations)
+                    print(f"[ReactAgent] (fallback) LLM 生成完成，结果: {final_text[:200] if final_text else 'None'}...")
+                    logger.debug("[Agent] final_text(head)=%r", (final_text or "")[:300])
+                    result = self._process_response(final_text)
+                    #break
+                else:
+                    logger.debug("[Agent] no tool proposed; stop without tool call")
+                    print(f"[ReactAgent] 没有工具建议，调用 generate 生成最终答复")
+                    final_text = await self.llm.generate(cur_prompt, tools=self._tools_declarations)
+                    print(f"[ReactAgent] generate 完成，结果: {final_text[:200] if final_text else 'None'}...")
+                    logger.debug("[Agent] final_text(head)=%r", (final_text or "")[:300])
+                    result = self._process_response(final_text)
+                    #break
+            tool_name = proposed.get("name")
+            tool_args = proposed.get("arguments", {})
 
-                # 强制遵循 action_prompt 中的“使用X工具”指示，覆盖 LLM 提议
-                try:
-                    import re
-                    m_force = re.search(r"使用\s*([A-Za-z0-9_\-]+)\s*工具", cur_prompt)
-                    if m_force:
-                        forced_tool = m_force.group(1)
-                        if forced_tool:
-                            tool_name = forced_tool
-                            # 若无参数则给空对象，保证能直连 Mock API 记录日志
-                            if not isinstance(tool_args, dict):
-                                tool_args = {}
-                except Exception:
-                    pass
-                logger.debug("[Agent] proposed tool=%s args=%s", tool_name, tool_args)
+            # 让LLM自由选择工具，不强制覆盖
+            print(f"[ReactAgent] LLM建议使用工具: {tool_name}")
+            logger.debug("[Agent] proposed tool=%s args=%s", tool_name, tool_args)
 
+            print(f"toolname:{tool_name}, args:{tool_args}");
+            
+            # 在验证之前，先合并注入的参数
+            if hasattr(self, '_injected_params') and self._injected_params:
+                print(f"[ReactAgent] 合并注入的参数: {self._injected_params}")
+                tool_args.update(self._injected_params)
+                print(f"[ReactAgent] 合并后的参数: {tool_args}")
+            
+            # 验证工具参数是否足够
+            missing_params = self._validate_tool_parameters(tool_name, tool_args)
+            if missing_params:
+                print(f"[ReactAgent] 工具 {tool_name} 缺少必需参数: {missing_params}")
+                return {
+                    "success": False,
+                    "reason": "missing_params",
+                    "required_params": missing_params,
+                    "response": f"工具 {tool_name} 缺少必需参数，需要用户输入",
+                    "tools_used": [],
+                    "result": {"success": False, "reason": "missing_params"}
+                }
+
+            for step_index in range(self.max_steps):
                 # 统一通过 call_tool 转发，endpoint 来自 schema
                 schema = self.tool_schemas.get(tool_name, {})
                 endpoint = schema.get("endpoint")
@@ -268,6 +350,42 @@ class ReactAgent:
             logger.error(f"Error executing ReactAgent: {e}")
             return {"success": False, "error": str(e)}
     
+    def _validate_tool_parameters(self, tool_name: str, tool_args: dict) -> dict:
+        """验证工具参数是否足够"""
+        print(f"[ReactAgent] 验证工具参数: {tool_name}")
+        print(f"[ReactAgent] 传入参数: {tool_args}")
+        
+        schema = self.tool_schemas.get(tool_name, {})
+        print(f"[ReactAgent] 工具schema: {schema}")
+        
+        parameters = schema.get("parameters", {})
+        required_params = parameters.get("required", [])
+        properties = parameters.get("properties", {})
+        
+        print(f"[ReactAgent] 必需参数: {required_params}")
+        print(f"[ReactAgent] 参数定义: {properties}")
+        
+        if not required_params:
+            print(f"[ReactAgent] 没有必需参数，验证通过")
+            return {}  # 没有必需参数，验证通过
+        
+        missing_params = {}
+        for param in required_params:
+            param_value = tool_args.get(param)
+            print(f"[ReactAgent] 检查参数 {param}: 值={param_value}, 存在={param in tool_args}, 非空={bool(param_value)}")
+            if param not in tool_args or not tool_args[param]:
+                param_def = properties.get(param, {})
+                missing_params[param] = {
+                    "type": param_def.get("type", "input"),
+                    "label": param_def.get("description", param),
+                    "description": param_def.get("description", f"请输入{param}"),
+                    "required": True
+                }
+                print(f"[ReactAgent] 参数 {param} 缺失，添加到missing_params")
+        
+        print(f"[ReactAgent] 最终缺失参数: {missing_params}")
+        return missing_params
+
     def _build_full_prompt(self, context: str) -> str:
         """构建完整的提示"""
         tools_description = "\n".join([f"- {tool}" for tool in self.tools])
@@ -439,6 +557,34 @@ class AgentRuntime:
         agent = self.get_agent(agent_id)
         if not agent:
             raise ValueError(f"Agent {agent_id} not found")
+        
+        # 检查是否有注入的参数
+        print(f"[AgentRuntime] 检查plan_context中的注入参数")
+        print(f"[AgentRuntime] plan_context keys: {list(plan_context.keys())}")
+        
+        # 从plan_context中查找注入的参数
+        injected_params = {}
+        if "001.context.injected_params" in plan_context:
+            injected_params = plan_context["001.context.injected_params"]
+            print(f"[AgentRuntime] 从001.context.injected_params发现注入的参数: {injected_params}")
+        elif "tasks" in plan_context and "001" in plan_context["tasks"]:
+            task_001 = plan_context["tasks"]["001"]
+            if "context" in task_001 and "injected_params" in task_001["context"]:
+                injected_params = task_001["context"]["injected_params"]
+                print(f"[AgentRuntime] 从tasks.001.context.injected_params发现注入的参数: {injected_params}")
+        
+        if injected_params:
+            print(f"[AgentRuntime] 发现注入的参数: {injected_params}")
+            # 将注入的参数添加到action_prompt中
+            params_str = ", ".join([f"{k}={v}" for k, v in injected_params.items()])
+            action_prompt = f"{action_prompt}\n\n注意：请使用以下参数：{params_str}"
+            print(f"[AgentRuntime] 更新后的action_prompt: {action_prompt}")
+            
+            # 将注入的参数设置到agent中，供ReactAgent使用
+            agent._injected_params = injected_params
+            print(f"[AgentRuntime] 已设置agent._injected_params: {injected_params}")
+        else:
+            print(f"[AgentRuntime] 未发现注入的参数")
         
         # 统一使用ReactAgent的execute方法，确保重试逻辑生效
         full_context = f"{action_prompt}\n\n上下文信息：{plan_context}"

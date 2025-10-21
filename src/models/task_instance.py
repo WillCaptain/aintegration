@@ -83,7 +83,7 @@ class TaskInstance:
         """检查是否为主任务（task_id == "001"）"""
         return self.task_id == "001"
     
-    def update_status(self, new_status: str, reason: str = "manual_update"):
+    def update_status(self, new_status: str, reason: str = "manual_update", context: Optional[Dict[str, Any]] = None):
         """更新任务状态并记录轨迹（由外部驱动）"""
         if new_status != self.status:
             old_status = self.status
@@ -98,7 +98,9 @@ class TaskInstance:
                     task_id=self.task_id,
                     old_status=old_status,
                     new_status=new_status,
-                    triggered_by=reason
+                    triggered_by="task_update",
+                    reason=reason,
+                    context=context
                 )
             except Exception as e:
                 # 日志记录失败不应影响主流程

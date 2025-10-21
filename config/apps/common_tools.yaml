@@ -1,0 +1,39 @@
+name: common_tools
+system_context: "你是一个通用工具代理，提供各种通用选项和列表数据，如地区列表、手机运营商列表等"
+tools:
+  - name: get_region_list
+    description: 获取地区列表选项
+    endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
+    parameters:
+      type: object
+      properties:
+        level:
+          type: string
+          description: "地区级别，如province、city等"
+          default: "province"
+      required: []
+  
+  - name: get_phone_operators
+    description: 获取手机运营商列表
+    endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
+    parameters:
+      type: object
+      properties: {}
+      required: []
+  
+  - name: get_parameter_options
+    description: 通用参数选项获取方法，支持A2A调用
+    endpoint: ${MOCK_API_URL:http://127.0.0.1:8009}/tool
+    parameters:
+      type: object
+      properties:
+        parameter_name:
+          type: string
+          description: "参数名称"
+        parameter_type:
+          type: string
+          description: "参数类型"
+        parameter_definition:
+          type: object
+          description: "参数定义"
+      required: [parameter_name]

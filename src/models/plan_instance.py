@@ -289,6 +289,11 @@ class PlanInstance:
                                 task_instance.context = {}
                             task_instance.context.update(context_update)
                             print(f"[PlanInstance] Updated task {target_task_id} context: {context_update}")
+                    
+                    # 关键修复：对于非主任务的状态变化，需要手动触发状态变化处理
+                    if target_task_id != "001":
+                        print(f"[PlanInstance] 手动处理非主任务状态变化: {target_task_id} -> {new_status}")
+                        await self._handle_task_status_change(target_task_id, "NotStarted", new_status)
         else:
             # 处理错误
             error_msg = result.get('error', 'Unknown error')
@@ -317,12 +322,32 @@ class PlanInstance:
                     # 然后更新任务状态（会触发planner_callback）
                     self.update_task_status(target_task_id, new_status, reason)
                     print(f"[PlanInstance] Updated task {target_task_id} status to {new_status}")
+                
+                # 处理计划实例状态更新（在循环内部）
+                plan_instance_status = update.get('plan_instance_status')
+                plan_instance_reason = update.get('plan_instance_reason')
+                if plan_instance_status:
+                    self.status = plan_instance_status
+                    if plan_instance_reason:
+                        if not hasattr(self, 'error_info') or self.error_info is None:
+                            self.error_info = {}
+                        self.error_info['reason'] = plan_instance_reason
+                    print(f"[PlanInstance] 计划实例状态更新为: {plan_instance_status}, reason: {plan_instance_reason}")
             
-            # 如果主任务出错，标记计划实例为错误状态（但不终止，等待PlannerAgent重试）
+            # 如果主任务出错，检查是否是missing_params错误
             main_task = self.get_main_task_instance()
             if main_task and main_task.status == "Error":
-                logger.warning(f"Main task is Error, waiting for PlannerAgent retry...")
-                # 注意：不设置plan_instance.status为error，让它继续运行等待重试
+                # 检查是否是missing_params错误，如果是则设置计划实例为error状态
+                if main_task.context and main_task.context.get('reason') == 'missing_params':
+                    self.status = "error"
+                    if not hasattr(self, 'error_info') or self.error_info is None:
+                        self.error_info = {}
+                    self.error_info['reason'] = 'missing_params'
+                    print(f"[PlanInstance] 计划实例因missing_params错误进入ERROR状态")
+                    logger.info(f"Plan instance {self.id} entered ERROR status due to missing_params")
+                else:
+                    logger.warning(f"Main task is Error, waiting for PlannerAgent retry...")
+                    # 注意：不设置plan_instance.status为error，让它继续运行等待重试
     
     def _start_main_task(self):
         """启动主任务"""

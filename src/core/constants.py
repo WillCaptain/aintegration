@@ -84,3 +84,12 @@ class ListenerType(Enum):
     """侦听器类型枚举"""
     AGENT = "agent"
     CODE = "code"
+
+class ErrorReason(Enum):
+    """错误原因枚举"""
+    MISSING_PARAMS = "missing_params"
+    TOOL_CALL_ERROR = "tool_call_error"
+    LISTENER_FAILURE = "listener_failure"
+    AGENT_EXECUTION_ERROR = "agent_execution_error"
+    NETWORK_ERROR = "network_error"
+    TIMEOUT_ERROR = "timeout_error"

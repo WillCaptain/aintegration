@@ -448,8 +448,8 @@ class ListenerEngine:
             if plan_instance_id:
                 # 通过 PlanInstance 更新任务状态（会发出事件）
                 # 注意：这里需要从 PlanModule 获取 PlanInstance，暂时跳过
-                    plan_instance.update_task_status(task_id, new_status, f"listener_execution: {execution_result.get('reason', 'completed')}")
-                    return
+                # plan_instance.update_task_status(task_id, new_status, f"listener_execution: {execution_result.get('reason', 'completed')}")
+                return
             
             # 回退到传统方式（向后兼容）
             task = await self.task_repo.get_by_id(task_id)

@@ -1,58 +1,52 @@
 """
-Mock LLM - 用于测试的模拟大语言模型
-快速返回预定义结果，避免真实LLM调用的延迟和不确定性
+Mock LLM Client for testing
 """
-import re
-from typing import Dict, Any, Optional, List
+from typing import Dict, List, Optional, Any
+from src.infrastructure.llm_client import LLMClient
 
-
-class MockLLM:
-    """模拟LLM，用于测试"""
-    
-    async def propose_tool_call(self, prompt: str, tools: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, str]]:
-        """从prompt中提取工具名，返回工具调用建议"""
-        # 提取"使用XXX工具"
-        m = re.search(r"使用\s*([A-Za-z0-9_\-]+)\s*工具", prompt)
-        if not m:
-            return None
-        
-        tool_name = m.group(1)
-        
-        # 验证工具是否在可用工具列表中
-        if tools:
-            # tools格式: [{"function_declarations": [{"name": "xxx", ...}]}]
-            available_tools = []
-            for tool_group in tools:
-                if isinstance(tool_group, dict) and "function_declarations" in tool_group:
-                    for func_decl in tool_group["function_declarations"]:
-                        if isinstance(func_decl, dict):
-                            available_tools.append(func_decl.get("name"))
-            
-            if tool_name not in available_tools:
-                print(f"[MockLLM] 工具{tool_name}不在可用列表{available_tools}中")
-                return None
-        
-        # 从prompt中提取参数
-        args = {}
-        # 提取{xxx}格式的参数
-        param_matches = re.findall(r"\{([^}]+)\}", prompt)
-        for param in param_matches:
-            if ".id" in param:
-                args["emp_id"] = f"{{{param}}}"
-            elif ".name" in param:
-                args["name"] = f"{{{param}}}"
-            elif ".department" in param:
-                args["department"] = f"{{{param}}}"
-            elif ".pc_model" in param:
-                args["pc_model"] = f"{{{param}}}"
-        
-        print(f"[MockLLM] propose_tool_call返回: tool={tool_name}, args={args}")
-        return {"name": tool_name, "arguments": args}
+class MockLLMClient(LLMClient):
+    """Mock LLM Client for testing - 总是返回None，触发容错逻辑"""
     
     async def generate(self, prompt: str, tools: Optional[List[Dict[str, Any]]] = None) -> str:
-        """生成简单的响应文本"""
-        print(f"[MockLLM] generate被调用，prompt长度={len(prompt)}")
-        result = "操作已完成。"
-        print(f"[MockLLM] generate返回: {result}")
-        return result
-
+        """Mock generate - 返回简单文本"""
+        return "Mock LLM response"
+    
+    async def propose_tool_call(self, prompt: str, tools: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
+        """Mock propose_tool_call - 根据prompt内容智能选择工具"""
+        print(f"[MockLLM] propose_tool_call called with prompt length: {len(prompt)}")
+        print(f"[MockLLM] Prompt content: {prompt[:200]}...")  # 显示prompt的前200个字符
+        if tools:
+            tool_names = [tool.get('name') if tool and isinstance(tool, dict) else str(tool) for tool in tools]
+            print(f"[MockLLM] Available tools: {tool_names}")
+        else:
+            print(f"[MockLLM] No tools provided")
+        
+        # 根据prompt内容智能选择工具
+        if tools:
+            # 处理ReactAgent传递的工具格式：[{"function_declarations": [schema...]}]
+            if isinstance(tools, list) and len(tools) > 0 and isinstance(tools[0], dict) and "function_declarations" in tools[0]:
+                tool_names = [tool.get('name') for tool in tools[0]["function_declarations"] if isinstance(tool, dict)]
+            else:
+                # 处理简单的工具名称列表
+                tool_names = [tool.get('name') if tool and isinstance(tool, dict) else str(tool) for tool in tools]
+            
+            # 根据prompt内容选择工具
+            if "创建合同联系人" in prompt or "联系人" in prompt:
+                selected_tool = "create_contact"
+            elif "基于联系人信息创建合同" in prompt or "创建合同" in prompt:
+                selected_tool = "create_contract"
+            elif "完成合同签署流程" in prompt or "签署合同" in prompt or "签署" in prompt:
+                selected_tool = "sign_contract"
+            else:
+                # 默认选择第一个可用工具
+                selected_tool = tool_names[0] if tool_names else None
+            
+            if selected_tool and selected_tool in tool_names:
+                print(f"[MockLLM] Selected tool: {selected_tool}")
+                return {
+                    "name": selected_tool,
+                    "args": {}
+                }
+        
+        print(f"[MockLLM] No suitable tool found, returning None")
+        return None
